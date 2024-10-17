@@ -4,11 +4,21 @@ use lut_synth::lut;
 fn make_rules() -> Vec<Rewrite<lut::LutLang, ()>> {
     vec![
         rewrite!("nor-conversion"; "(NOR ?a ?b)" => "(LUT 1 ?a ?b)"),
+        // Evaluate constant programs
         rewrite!("lut2-const"; "(LUT 0 ?a ?b)" => "false"),
         rewrite!("lut3-const"; "(LUT 0 ?a ?b ?c)" => "false"),
         rewrite!("lut4-const"; "(LUT 0 ?a ?b ?c ?d)" => "false"),
         rewrite!("lut5-const"; "(LUT 0 ?a ?b ?c ?d ?e)" => "false"),
         rewrite!("lut6-const"; "(LUT 0 ?a ?b ?c ?d ?e ?d)" => "false"),
+        // Evaluate constant inputs
+
+        // DSD an input 6-LUT into two 4-LUTs
+        // DSD with one shared variable: an k-LUT (k even) into two (N/2 + 1)-LUTS
+
+        // LUT permutation groups
+
+        // LUT fuse inputs
+        // LUT split inputs
     ]
 }
 
