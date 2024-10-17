@@ -1,3 +1,4 @@
+use bitvec::prelude::*;
 use egg::*;
 use lut_synth::lut;
 
@@ -17,8 +18,9 @@ fn make_rules() -> Vec<Rewrite<lut::LutLang, ()>> {
 
         // LUT permutation groups
 
-        // LUT fuse inputs
-        // LUT split inputs
+        // LUT fuse mutually exclusive inputs
+
+        // LUT fuse non-mutually exclusive inputs (hard, opposite of DSD)
     ]
 }
 

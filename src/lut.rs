@@ -1,3 +1,4 @@
+use bitvec::prelude::*;
 use egg::define_language;
 use egg::Id;
 use egg::Language;
@@ -74,15 +75,85 @@ impl LutLang {
     }
 }
 
+/// [inputs] should be big-end first
 pub fn eval_lut(p: u64, inputs: &[bool]) -> bool {
-    let b2: usize = 2;
     let mut index = 0;
     for (i, input) in inputs.iter().rev().enumerate() {
         if *input {
-            index += b2.pow(i as u32);
+            index += 1 << i;
         }
     }
     (p >> index) & 1 == 1
+}
+
+/// Convert a u64 LUT to a bitvec
+pub fn to_bitvec(p: u64, capacity: usize) -> BitVec {
+    assert!(capacity <= 64);
+    let mut bv: BitVec = bitvec!(usize, Lsb0; 0; capacity);
+    bv[0..capacity].store::<u64>(p);
+    bv
+}
+
+/// Convert a bitvec to a u64 LUT
+pub fn from_bitvec(bv: BitVec) -> u64 {
+    assert!(bv.len() <= 64);
+    bv[0..bv.len()].load::<u64>()
+}
+
+/// Evaluate a LUT with a bitvec input stored lsb first
+pub fn eval_lut_bv(p: u64, inputs: &BitVec) -> bool {
+    let mut index = 0;
+    assert!(inputs.len() <= 6);
+    for (i, input) in inputs.iter().enumerate() {
+        if *input {
+            index += 1 << i;
+        }
+    }
+    (p >> index) & 1 == 1
+}
+
+/// Return the LUT with the [msb] input tied to [v]
+pub fn eval_lut_const_input(p: &u64, msb: usize, v: bool) -> u64 {
+    assert!(msb <= 5);
+    assert_eq!(msb >> (1 << (msb + 1)), 0);
+    if v {
+        p >> (1 << msb)
+    } else {
+        p & (1 << (1 << msb)) - 1
+    }
+}
+
+/// Swap the truth table for input i and input (i+1).
+/// Together these generate the permutation group
+pub fn swap_pos(bv: &u64, k: usize, pos: usize) -> u64 {
+    assert!(pos < k - 1);
+    let mut list: Vec<BitVec> = Vec::new();
+    for i in 0..(1 << k) {
+        list.push(to_bitvec(i, k));
+    }
+    for i in 0..(1 << k) {
+        let tmp = list[i][pos];
+        let tmp2 = list[i][pos + 1];
+        list[i].set(pos, tmp2);
+        list[i].set(pos + 1, tmp);
+    }
+    let mut nbv: BitVec = BitVec::with_capacity(1 << k);
+    for i in 0..(1 << k) {
+        nbv.push(eval_lut_bv(*bv, &list[i]));
+    }
+    from_bitvec(nbv)
+}
+
+/// Fuse look-up tables [p] into [q] at position [i]
+/// Will crash if the result would be >= 2**64.
+/// Only works for mutually exclusive input groups.
+pub fn fuse_lut(p: &u64, q: &u64, i: usize) -> u64 {
+    (p << (1 << i)) | q
+}
+
+/// Fuse look-up tables [p] with [q]
+pub fn fuse_lut_heavy(p: &u64, q: &u64, pi: &[Id], qi: &[Id]) -> (u64, Vec<Id>) {
+    todo!()
 }
 
 pub fn init() {
