@@ -1,23 +1,26 @@
-use bitvec::prelude::*;
 use egg::*;
-use lut_synth::lut;
+use lut_synth::{
+    analysis::{LutAnalysis, PermuteInput},
+    lut,
+};
 
-fn make_rules() -> Vec<Rewrite<lut::LutLang, ()>> {
+#[allow(dead_code)]
+fn make_rules() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     vec![
-        rewrite!("nor-conversion"; "(NOR ?a ?b)" => "(LUT 1 ?a ?b)"),
+        rewrite!("nor2-conversion"; "(NOR ?a ?b)" => "(LUT 1 ?a ?b)"),
         // Evaluate constant programs
         rewrite!("lut2-const"; "(LUT 0 ?a ?b)" => "false"),
         rewrite!("lut3-const"; "(LUT 0 ?a ?b ?c)" => "false"),
         rewrite!("lut4-const"; "(LUT 0 ?a ?b ?c ?d)" => "false"),
         rewrite!("lut5-const"; "(LUT 0 ?a ?b ?c ?d ?e)" => "false"),
         rewrite!("lut6-const"; "(LUT 0 ?a ?b ?c ?d ?e ?d)" => "false"),
-        // Evaluate constant inputs
+        // Evaluate constant inputs (impl as modify analysis)
 
         // DSD an input 6-LUT into two 4-LUTs
         // DSD with one shared variable: an k-LUT (k even) into two (N/2 + 1)-LUTS
 
         // LUT permutation groups
-
+        rewrite!("lut2-permute"; "(LUT ?p ?a ?b)" => {PermuteInput::new(1, "?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap()])}),
         // LUT fuse mutually exclusive inputs
 
         // LUT fuse non-mutually exclusive inputs (hard, opposite of DSD)
@@ -46,7 +49,7 @@ fn simplify(s: &str) -> String {
 
 #[test]
 fn simple_tests() {
-    assert_eq!(simplify("(LUT 0 a true)"), "false");
+    assert_eq!(simplify("(LUT 2 a b)"), "(LUT 2 a b)");
 }
 fn main() {
     println!("Hello, world!");

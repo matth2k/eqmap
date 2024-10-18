@@ -1,3 +1,4 @@
+use super::analysis::LutAnalysis;
 use bitvec::prelude::*;
 use egg::define_language;
 use egg::Id;
@@ -49,7 +50,7 @@ impl LutLang {
     }
 
     /// Extract the program from a Lut node contained in expression [expr]
-    fn get_program(&self, expr: RecExpr<Self>) -> Result<u64, String> {
+    fn get_program(&self, expr: &RecExpr<Self>) -> Result<u64, String> {
         match self {
             LutLang::Lut(l) => {
                 self.verify()?;
@@ -58,6 +59,37 @@ impl LutLang {
                     LutLang::Program(p) => Ok(p),
                     _ => Err("First element of LUT must be a program".to_string()),
                 }
+            }
+            _ => Err("Not a LUT".to_string()),
+        }
+    }
+
+    /// Extract the program from a Lut node contained in [egraph]
+    pub fn get_program_in_egraph(
+        &self,
+        egraph: &egg::EGraph<LutLang, LutAnalysis>,
+    ) -> Result<u64, String> {
+        match self {
+            LutLang::Lut(l) => {
+                self.verify()?;
+                let p = l.first().unwrap();
+                let class = &egraph[*p];
+                let data = &class.data;
+                data.get_program()
+            }
+            _ => Err("Not a LUT".to_string()),
+        }
+    }
+
+    /// Extract the program from a Lut node contained in [egraph]
+    pub fn get_operand_classes(
+        &self,
+        _egraph: &egg::EGraph<LutLang, LutAnalysis>,
+    ) -> Result<Vec<Id>, String> {
+        match self {
+            LutLang::Lut(l) => {
+                self.verify()?;
+                Ok(Vec::from(&l[1..]))
             }
             _ => Err("Not a LUT".to_string()),
         }
@@ -95,7 +127,7 @@ pub fn to_bitvec(p: u64, capacity: usize) -> BitVec {
 }
 
 /// Convert a bitvec to a u64 LUT
-pub fn from_bitvec(bv: BitVec) -> u64 {
+pub fn from_bitvec(bv: &BitVec) -> u64 {
     assert!(bv.len() <= 64);
     bv[0..bv.len()].load::<u64>()
 }
@@ -124,7 +156,8 @@ pub fn eval_lut_const_input(p: &u64, msb: usize, v: bool) -> u64 {
 }
 
 /// Swap the truth table for input i and input (i+1).
-/// Together these generate the permutation group
+/// Together these generate the permutation group.
+/// [pos] 0 is the lsb.
 pub fn swap_pos(bv: &u64, k: usize, pos: usize) -> u64 {
     assert!(pos < k - 1);
     let mut list: Vec<BitVec> = Vec::new();
@@ -141,7 +174,7 @@ pub fn swap_pos(bv: &u64, k: usize, pos: usize) -> u64 {
     for i in 0..(1 << k) {
         nbv.push(eval_lut_bv(*bv, &list[i]));
     }
-    from_bitvec(nbv)
+    from_bitvec(&nbv)
 }
 
 /// Fuse look-up tables [p] into [q] at position [i]
