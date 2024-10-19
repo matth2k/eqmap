@@ -1,6 +1,5 @@
 use super::lut;
-use bitvec::vec;
-use egg::{Analysis, Applier, DidMerge, Language, Var};
+use egg::{Analysis, Applier, DidMerge, Var};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LutAnalysisData {
@@ -61,13 +60,39 @@ impl Analysis<lut::LutLang> for LutAnalysis {
                     let program = node
                         .get_program_in_egraph(egraph)
                         .expect("Expected program");
-                    let mod_program =
-                        lut::eval_lut_const_input(&program, operands.len() - 1, msb_const.unwrap());
-                    let pi = egraph.add(lut::LutLang::Program(mod_program));
-                    let mut c = operands.clone();
-                    c[0] = pi;
-                    let repl = egraph.add(lut::LutLang::Lut(c.into()));
-                    egraph.union(id, repl);
+                    if operands.len() > 1 {
+                        let mod_program = lut::eval_lut_const_input(
+                            &program,
+                            operands.len() - 1,
+                            msb_const.unwrap(),
+                        );
+                        let pi = egraph.add(lut::LutLang::Program(mod_program));
+                        let mut c = operands.clone();
+                        c[0] = pi;
+                        let repl = egraph.add(lut::LutLang::Lut(c.into()));
+                        egraph.union(id, repl);
+                    } else {
+                        let const_val = msb_const.unwrap();
+                        match program & 3 {
+                            0 => {
+                                let repl = egraph.add(lut::LutLang::Const(false));
+                                egraph.union(id, repl);
+                            }
+                            3 => {
+                                let repl = egraph.add(lut::LutLang::Const(true));
+                                egraph.union(id, repl);
+                            }
+                            2 => {
+                                let repl = egraph.add(lut::LutLang::Const(const_val));
+                                egraph.union(id, repl);
+                            }
+                            1 => {
+                                let repl = egraph.add(lut::LutLang::Const(!const_val));
+                                egraph.union(id, repl);
+                            }
+                            _ => (),
+                        }
+                    }
                 }
             }
         }

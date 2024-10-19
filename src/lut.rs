@@ -16,6 +16,7 @@ define_language! {
         Var(Symbol),
         "x" = DC,
         "NOR" = Nor([Id; 2]),
+        "MUX" = Mux([Id; 3]), // s, a, b
         // "NAND" = Nand([Id; 2]),
         "LUT" = Lut(Box<[Id]>), // Program is first
     }
