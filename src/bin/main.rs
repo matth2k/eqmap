@@ -21,10 +21,13 @@ fn simplify(s: &str) -> String {
 
     // use an Extractor to pick the best element of the root eclass
     let extractor = Extractor::new(&runner.egraph, AstSize);
-    let (best_cost, best) = extractor.find_best(root);
+    let (_best_cost, best) = extractor.find_best(root);
     let expl = runner.explain_equivalence(&expr, &best);
     println!("{}", expl);
-    println!("Simplified {} to {} with cost {}", expr, best, best_cost);
+    println!(
+        "Total num of nodes {}",
+        runner.egraph.total_number_of_nodes()
+    );
     best.to_string()
 }
 

@@ -62,7 +62,7 @@ pub fn all_rules() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
         rules.push(rewrite!(rname; "(LUT ?p ?a ?b ?c ?d ?e ?f)" 
         => {PermuteInput::new(i, "?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?e".parse().unwrap(), "?f".parse().unwrap()])}));
     }
-    // LUT fuse mutually exclusive inputs
+    // LUT fuse inputs (exclusive or not, sometimes the opposite of DSD)
 
     // 2-(2,2) => 4-LUT
     // 2-(2,3) => 5-LUT
