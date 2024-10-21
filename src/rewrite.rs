@@ -3,38 +3,8 @@ use super::lut;
 use bitvec::{bitvec, order::Lsb0};
 use egg::{rewrite, Applier, Rewrite, Var};
 
-pub fn all_rules() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
+pub fn permute_groups() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
-    // Logic element conversions
-    rules.push(rewrite!("nor2-conversion"; "(NOR ?a ?b)" => "(LUT 1 ?a ?b)"));
-
-    // s? a : b
-    rules.push(rewrite!("mux2-1-conversion"; "(MUX ?s ?a ?b)" => "(LUT 202 ?s ?a ?b)"));
-
-    // Evaluate constant programs
-    rules.push(rewrite!("lut2-const"; "(LUT 0 ?a ?b)" => "false"));
-    rules.push(rewrite!("lut3-const"; "(LUT 0 ?a ?b ?c)" => "false"));
-    rules.push(rewrite!("lut4-const"; "(LUT 0 ?a ?b ?c ?d)" => "false"));
-    rules.push(rewrite!("lut5-const"; "(LUT 0 ?a ?b ?c ?d ?e)" => "false"));
-    rules.push(rewrite!("lut6-const"; "(LUT 0 ?a ?b ?c ?d ?e ?d)" => "false"));
-
-    // Evaluate constant inputs (impl as modify-analysis for multi-input cases)
-    rules.push(rewrite!("lut1-const-f"; "(LUT 0 ?a)" => "false"));
-    rules.push(rewrite!("lut1-const-t"; "(LUT 3 ?a)" => "true"));
-    rules.push(rewrite!("lut1-const-id"; "(LUT 2 ?a)" => "?a"));
-    rules.push(rewrite!("lut1-const-if"; "(LUT 1 false)" => "true"));
-    rules.push(rewrite!("lut1-const-it"; "(LUT 1 true)" => "false"));
-
-    // Remove redudant inputs
-    rules.push(rewrite!("lut2-redundant"; "(LUT ?p ?a ?a)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap()])}));
-    rules.push(rewrite!("lut3-redundant"; "(LUT ?p ?a ?a ?b)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap(), "?b".parse().unwrap()])}));
-    rules.push(rewrite!("lut4-redundant"; "(LUT ?p ?a ?a ?b ?c)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap()])}));
-    rules.push(rewrite!("lut5-redundant"; "(LUT ?p ?a ?a ?b ?c ?d)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap()])}));
-    rules.push(rewrite!("lut6-redundant"; "(LUT ?p ?a ?a ?b ?c ?d ?e)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?e".parse().unwrap()])}));
-
-    // DSD an input 6-LUT into two 4-LUTs
-    // DSD with one shared variable: an k-LUT (k even) into two (N/2 + 1)-LUTS
-
     // LUT permutation groups
     rules.push(rewrite!("lut2-permute"; "(LUT ?p ?a ?b)" 
         => {PermuteInput::new(1, "?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap()])}));
@@ -62,6 +32,60 @@ pub fn all_rules() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
         rules.push(rewrite!(rname; "(LUT ?p ?a ?b ?c ?d ?e ?f)" 
         => {PermuteInput::new(i, "?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?e".parse().unwrap(), "?f".parse().unwrap()])}));
     }
+
+    rules
+}
+
+pub fn shannon_expansion() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
+    let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
+
+    // Condense Shannon expansion
+    rules.push(rewrite!("lut2-condense"; "(LUT 202 ?s (LUT ?p ?a ?b) (LUT ?q ?a ?b))" => {ShannonCondense::new("?s".parse().unwrap(), "?p".parse().unwrap(), "?q".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap()])}));
+    rules.push(rewrite!("lut3-condense"; "(LUT 202 ?s (LUT ?p ?a ?b ?c) (LUT ?q ?a ?b ?c))" => {ShannonCondense::new("?s".parse().unwrap(), "?p".parse().unwrap(), "?q".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap()])}));
+    rules.push(rewrite!("lut4-condense"; "(LUT 202 ?s (LUT ?p ?a ?b ?c ?d) (LUT ?q ?a ?b ?c ?d))" => {ShannonCondense::new("?s".parse().unwrap(), "?p".parse().unwrap(), "?q".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap()])}));
+    rules.push(rewrite!("lut5-condense"; "(LUT 202 ?s (LUT ?p ?a ?b ?c ?d ?e) (LUT ?q ?a ?b ?c ?d ?e))" => {ShannonCondense::new("?s".parse().unwrap(), "?p".parse().unwrap(), "?q".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?e".parse().unwrap()])}));
+
+    rules
+}
+
+pub fn all_rules() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
+    let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
+    // Logic element conversions
+    rules.push(rewrite!("nor2-conversion"; "(NOR ?a ?b)" => "(LUT 1 ?a ?b)"));
+
+    // s? a : b
+    rules.push(rewrite!("mux2-1-conversion"; "(MUX ?s ?a ?b)" => "(LUT 202 ?s ?a ?b)"));
+    rules.push(rewrite!("mux-elim"; "(LUT 202 ?s ?a ?a)" => "?a"));
+
+    // Evaluate constant programs
+    rules.push(rewrite!("lut2-const"; "(LUT 0 ?a ?b)" => "false"));
+    rules.push(rewrite!("lut3-const"; "(LUT 0 ?a ?b ?c)" => "false"));
+    rules.push(rewrite!("lut4-const"; "(LUT 0 ?a ?b ?c ?d)" => "false"));
+    rules.push(rewrite!("lut5-const"; "(LUT 0 ?a ?b ?c ?d ?e)" => "false"));
+    rules.push(rewrite!("lut6-const"; "(LUT 0 ?a ?b ?c ?d ?e ?d)" => "false"));
+
+    // Evaluate constant inputs (impl as modify-analysis for multi-input cases)
+    rules.push(rewrite!("lut1-const-f"; "(LUT 0 ?a)" => "false"));
+    rules.push(rewrite!("lut1-const-t"; "(LUT 3 ?a)" => "true"));
+    rules.push(rewrite!("lut1-const-id"; "(LUT 2 ?a)" => "?a"));
+    rules.push(rewrite!("lut1-const-if"; "(LUT 1 false)" => "true"));
+    rules.push(rewrite!("lut1-const-it"; "(LUT 1 true)" => "false"));
+
+    // Remove redundant inputs
+    rules.push(rewrite!("lut2-redundant"; "(LUT ?p ?a ?a)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap()])}));
+    rules.push(rewrite!("lut3-redundant"; "(LUT ?p ?a ?b ?b)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?b".parse().unwrap()])}));
+    rules.push(rewrite!("lut4-redundant"; "(LUT ?p ?a ?b ?c ?c)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?c".parse().unwrap()])}));
+    rules.push(rewrite!("lut5-redundant"; "(LUT ?p ?a ?b ?c ?d ?d)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?d".parse().unwrap()])}));
+    rules.push(rewrite!("lut6-redundant"; "(LUT ?p ?a ?b ?c ?d ?e ?e)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?e".parse().unwrap(), "?e".parse().unwrap()])}));
+
+    // DSD an input 6-LUT into two 4-LUTs
+    // DSD with one shared variable: an k-LUT (k even) into two (N/2 + 1)-LUTS
+
+    rules.append(&mut permute_groups());
+
+    // Condense Shannon expansion
+    rules.append(&mut shannon_expansion());
+
     // LUT fuse inputs (exclusive or not, sometimes the opposite of DSD)
 
     // 2-(2,2) => 4-LUT
@@ -162,7 +186,8 @@ impl Applier<lut::LutLang, LutAnalysis> for CombineAlikeInputs {
             .iter()
             .map(|v| subst[*v])
             .collect::<Vec<egg::Id>>();
-        assert!(operands[0] == operands[1]);
+        let olen = operands.len();
+        assert!(operands[olen - 1] == operands[olen - 2]);
         let program = egraph[subst[self.program]]
             .data
             .get_program()
@@ -178,8 +203,71 @@ impl Applier<lut::LutLang, LutAnalysis> for CombineAlikeInputs {
         let new_prog = lut::from_bitvec(&new_prog);
         let new_prog_id = egraph.add(lut::LutLang::Program(new_prog));
         let mut c = Vec::from(&[new_prog_id]);
-        operands.remove(1);
+        operands.pop();
         c.append(&mut operands);
+        let new_lut = egraph.add(lut::LutLang::Lut(c.into()));
+
+        if egraph.union_trusted(eclass, new_lut, rule_name) {
+            vec![new_lut]
+        } else {
+            vec![]
+        }
+    }
+}
+
+/// A rewrite applier for combining two inputs that are the same.
+/// In short, we want q << (1 << k) | p
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShannonCondense {
+    /// The new sel input to add
+    sel: Var,
+    /// The program when sel=0
+    p: Var,
+    /// The program when sel=1
+    q: Var,
+    /// The inputs
+    vars: Vec<Var>,
+}
+
+impl ShannonCondense {
+    pub fn new(sel: Var, p: Var, q: Var, vars: Vec<Var>) -> Self {
+        Self { sel, p, q, vars }
+    }
+}
+
+impl Applier<lut::LutLang, LutAnalysis> for ShannonCondense {
+    fn apply_one(
+        &self,
+        egraph: &mut egg::EGraph<lut::LutLang, LutAnalysis>,
+        eclass: egg::Id,
+        subst: &egg::Subst,
+        _searcher_ast: Option<&egg::PatternAst<lut::LutLang>>,
+        rule_name: egg::Symbol,
+    ) -> Vec<egg::Id> {
+        let mut operands = self
+            .vars
+            .iter()
+            .map(|v| subst[*v])
+            .collect::<Vec<egg::Id>>();
+        let p = egraph[subst[self.p]]
+            .data
+            .get_program()
+            .expect("Expected program");
+        let q = egraph[subst[self.q]]
+            .data
+            .get_program()
+            .expect("Expected program");
+        if p == q {
+            return vec![];
+        }
+        let k = operands.len();
+        assert!(k <= 5);
+        let new_prog = p << (1 << k) | q;
+        let new_prog_id = egraph.add(lut::LutLang::Program(new_prog));
+        let sel = subst[self.sel];
+        let mut c = Vec::from(&[new_prog_id, sel]);
+        c.append(&mut operands);
+        assert!(c.len() == k + 2);
         let new_lut = egraph.add(lut::LutLang::Lut(c.into()));
 
         if egraph.union_trusted(eclass, new_lut, rule_name) {

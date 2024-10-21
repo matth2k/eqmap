@@ -178,9 +178,10 @@ pub fn swap_pos(bv: &u64, k: usize, pos: usize) -> u64 {
         list[i].set(pos, tmp2);
         list[i].set(pos + 1, tmp);
     }
-    let mut nbv: BitVec = BitVec::with_capacity(1 << k);
+    let mut nbv: BitVec = bitvec!(usize, Lsb0; 0; 1 << k);
     for i in 0..(1 << k) {
-        nbv.push(eval_lut_bv(*bv, &list[i]));
+        let index = from_bitvec(&list[i]) as usize;
+        nbv.set(index, eval_lut_bv(*bv, &to_bitvec(i as u64, k)));
     }
     from_bitvec(&nbv)
 }

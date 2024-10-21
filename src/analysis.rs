@@ -8,17 +8,24 @@ pub struct LutAnalysisData {
     program: Option<u64>,
     /// If a class is a constant true or false, store it
     const_val: Option<bool>,
+    /// If a class is an input, store it
+    input: Option<String>,
 }
 
 impl LutAnalysisData {
-    pub fn new(program: Option<u64>, const_val: Option<bool>) -> Self {
-        Self { program, const_val }
+    pub fn new(program: Option<u64>, const_val: Option<bool>, input: Option<String>) -> Self {
+        Self {
+            program,
+            const_val,
+            input,
+        }
     }
 
     pub fn default() -> Self {
         Self {
             program: None,
             const_val: None,
+            input: None,
         }
     }
 
@@ -37,6 +44,10 @@ impl LutAnalysisData {
             None => Err("No constant value found".to_string()),
         }
     }
+
+    pub fn is_an_input(&self) -> bool {
+        self.input.is_some()
+    }
 }
 
 #[derive(Default)]
@@ -44,13 +55,24 @@ pub struct LutAnalysis;
 impl Analysis<lut::LutLang> for LutAnalysis {
     type Data = LutAnalysisData;
     fn merge(&mut self, to: &mut Self::Data, from: Self::Data) -> DidMerge {
-        DidMerge(false, false)
+        assert!(to.program == from.program);
+        assert!(
+            to.const_val == from.const_val || to.const_val.is_none() || from.const_val.is_none()
+        );
+        assert!(to.input == from.input || to.input.is_none() || from.input.is_none());
+        let mut merged = to.clone();
+        merged.const_val = from.const_val.or(to.const_val);
+        merged.input = from.input.clone().or(to.input.clone());
+        let merged_to = merged != *to;
+        *to = merged;
+        DidMerge(merged_to, *to != from)
     }
     fn make(egraph: &egg::EGraph<lut::LutLang, Self>, enode: &lut::LutLang) -> Self::Data {
         match enode {
-            lut::LutLang::Lut(l) => LutAnalysisData::new(None, None),
-            lut::LutLang::Program(p) => LutAnalysisData::new(Some(*p), None),
-            lut::LutLang::Const(c) => LutAnalysisData::new(None, Some(*c)),
+            lut::LutLang::Lut(_l) => LutAnalysisData::new(None, None, None),
+            lut::LutLang::Program(p) => LutAnalysisData::new(Some(*p), None, None),
+            lut::LutLang::Const(c) => LutAnalysisData::new(None, Some(*c), None),
+            lut::LutLang::Var(v) => LutAnalysisData::new(None, None, Some(v.to_string())),
             _ => LutAnalysisData::default(),
         }
     }

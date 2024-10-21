@@ -45,7 +45,7 @@ fn simple_tests() {
 }
 
 #[test]
-fn redudant_inputs() {
+fn redundant_inputs() {
     assert_eq!(simplify("(LUT 1 a a a a a)"), "(LUT 1 a)");
     assert_eq!(simplify("(LUT 1 a a a a a a)"), "(LUT 1 a)");
     assert_eq!(simplify("(LUT 1 a b a b a b)"), "(LUT 1 a b)");
