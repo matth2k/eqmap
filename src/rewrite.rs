@@ -48,14 +48,24 @@ pub fn shannon_expansion() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules
 }
 
+pub fn redundant_inputs() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
+    let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
+    rules.push(rewrite!("lut2-redundant"; "(LUT ?p ?a ?a)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap()])}));
+    rules.push(rewrite!("lut3-redundant"; "(LUT ?p ?a ?b ?b)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?b".parse().unwrap()])}));
+    rules.push(rewrite!("lut4-redundant"; "(LUT ?p ?a ?b ?c ?c)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?c".parse().unwrap()])}));
+    rules.push(rewrite!("lut5-redundant"; "(LUT ?p ?a ?b ?c ?d ?d)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?d".parse().unwrap()])}));
+    rules.push(rewrite!("lut6-redundant"; "(LUT ?p ?a ?b ?c ?d ?e ?e)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?e".parse().unwrap(), "?e".parse().unwrap()])}));
+
+    rules
+}
+
 pub fn all_rules() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
+
     // Logic element conversions
     rules.push(rewrite!("nor2-conversion"; "(NOR ?a ?b)" => "(LUT 1 ?a ?b)"));
-
     // s? a : b
     rules.push(rewrite!("mux2-1-conversion"; "(MUX ?s ?a ?b)" => "(LUT 202 ?s ?a ?b)"));
-    rules.push(rewrite!("mux-elim"; "(LUT 202 ?s ?a ?a)" => "?a"));
 
     // Evaluate constant programs
     rules.push(rewrite!("lut2-const"; "(LUT 0 ?a ?b)" => "false"));
@@ -72,15 +82,12 @@ pub fn all_rules() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules.push(rewrite!("lut1-const-it"; "(LUT 1 true)" => "false"));
 
     // Remove redundant inputs
-    rules.push(rewrite!("lut2-redundant"; "(LUT ?p ?a ?a)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap()])}));
-    rules.push(rewrite!("lut3-redundant"; "(LUT ?p ?a ?b ?b)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?b".parse().unwrap()])}));
-    rules.push(rewrite!("lut4-redundant"; "(LUT ?p ?a ?b ?c ?c)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?c".parse().unwrap()])}));
-    rules.push(rewrite!("lut5-redundant"; "(LUT ?p ?a ?b ?c ?d ?d)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?d".parse().unwrap()])}));
-    rules.push(rewrite!("lut6-redundant"; "(LUT ?p ?a ?b ?c ?d ?e ?e)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?e".parse().unwrap(), "?e".parse().unwrap()])}));
+    rules.append(&mut redundant_inputs());
 
-    // DSD an input 6-LUT into two 4-LUTs
+    // TODO: DSD an input 6-LUT into two 4-LUTs
     // DSD with one shared variable: an k-LUT (k even) into two (N/2 + 1)-LUTS
 
+    // LUT permutation groups
     rules.append(&mut permute_groups());
 
     // Condense Shannon expansion
@@ -133,6 +140,11 @@ impl Applier<lut::LutLang, LutAnalysis> for PermuteInput {
             .expect("Expected program");
 
         assert!(self.pos > 0);
+
+        if operands[self.pos] == operands[self.pos - 1] {
+            return vec![];
+        }
+
         let pos_from_lsb = (operands.len() - 1) - self.pos;
         let new_program = lut::swap_pos(&program, operands.len(), pos_from_lsb);
         let new_program_id = egraph.add(lut::LutLang::Program(new_program));
@@ -193,6 +205,14 @@ impl Applier<lut::LutLang, LutAnalysis> for CombineAlikeInputs {
             .get_program()
             .expect("Expected program");
         let k = operands.len();
+        // Handle the mux case as a special case
+        if k == 3 && program == 202 {
+            return if egraph.union_trusted(eclass, operands[olen - 1], rule_name) {
+                vec![operands[olen - 1]]
+            } else {
+                vec![]
+            };
+        }
         let mut new_prog = bitvec!(usize, Lsb0; 0; 1 << (k-1));
         for i in 0..(1 << (k - 2)) {
             let eval_e = lut::eval_lut_bv(program, &lut::to_bitvec(i << 2, 1 << k));
