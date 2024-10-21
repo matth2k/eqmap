@@ -1,6 +1,8 @@
+use std::io::Read;
+
 use egg::*;
 use lut_synth::{
-    analysis::{LutAnalysis, PermuteInput},
+    analysis::{CombineAlikeInputs, LutAnalysis, PermuteInput},
     lut,
 };
 
@@ -24,8 +26,15 @@ fn make_rules() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules.push(rewrite!("lut1-const-f"; "(LUT 0 ?a)" => "false"));
     rules.push(rewrite!("lut1-const-t"; "(LUT 3 ?a)" => "true"));
     rules.push(rewrite!("lut1-const-id"; "(LUT 2 ?a)" => "?a"));
-    rules.push(rewrite!("lut1-const-i"; "(LUT 1 false)" => "true"));
-    rules.push(rewrite!("lut1-const-i"; "(LUT 1 true)" => "false"));
+    rules.push(rewrite!("lut1-const-if"; "(LUT 1 false)" => "true"));
+    rules.push(rewrite!("lut1-const-it"; "(LUT 1 true)" => "false"));
+
+    // Remove redudant inputs
+    rules.push(rewrite!("lut2-redundant"; "(LUT ?p ?a ?a)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap()])}));
+    rules.push(rewrite!("lut3-redundant"; "(LUT ?p ?a ?a ?b)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap(), "?b".parse().unwrap()])}));
+    rules.push(rewrite!("lut4-redundant"; "(LUT ?p ?a ?a ?b ?c)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap()])}));
+    rules.push(rewrite!("lut5-redundant"; "(LUT ?p ?a ?a ?b ?c ?d)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap()])}));
+    rules.push(rewrite!("lut6-redundant"; "(LUT ?p ?a ?a ?b ?c ?d ?e)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?e".parse().unwrap()])}));
 
     // DSD an input 6-LUT into two 4-LUTs
     // DSD with one shared variable: an k-LUT (k even) into two (N/2 + 1)-LUTS
@@ -75,7 +84,10 @@ fn simplify(s: &str) -> String {
 
     // simplify the expression using a Runner, which creates an e-graph with
     // the given expression and runs the given rules over it
-    let runner = Runner::default().with_expr(&expr).run(&make_rules());
+    let mut runner = Runner::default()
+        .with_explanations_enabled()
+        .with_expr(&expr)
+        .run(&make_rules());
 
     // the Runner knows which e-class the expression given with `with_expr` is in
     let root = runner.roots[0];
@@ -84,6 +96,8 @@ fn simplify(s: &str) -> String {
     // use an Extractor to pick the best element of the root eclass
     let extractor = Extractor::new(&runner.egraph, AstSize);
     let (best_cost, best) = extractor.find_best(root);
+    let expl = runner.explain_equivalence(&expr, &best);
+    println!("{}", expl);
     println!("Simplified {} to {} with cost {}", expr, best, best_cost);
     best.to_string()
 }
@@ -100,7 +114,17 @@ fn simple_tests() {
     assert_eq!(simplify("(LUT 1 false)"), "true");
     assert_eq!(simplify("(LUT 2 false)"), "false");
 }
-fn main() {
-    println!("Hello, world!");
-    lut::init();
+
+#[test]
+fn redudant_inputs() {
+    assert_eq!(simplify("(LUT 1 a a a a a)"), "(LUT 1 a)");
+    assert_eq!(simplify("(LUT 1 a a a a a a)"), "(LUT 1 a)");
+    assert_eq!(simplify("(LUT 1 a b a b a b)"), "(LUT 1 a b)");
+}
+
+fn main() -> std::io::Result<()> {
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf)?;
+    println!("{}", simplify(&buf));
+    Ok(())
 }

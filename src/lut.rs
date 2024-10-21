@@ -36,11 +36,18 @@ impl LutLang {
                     Ok(())
                 }
             }
+            LutLang::Var(f) => {
+                if f.as_str() == "NOR" || f.as_str() == "LUT" || f.as_str() == "MUX" {
+                    return Err("Variable name is reserved".to_string());
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
 
     /// Verify a LutLang expression [expr] rooted at [self]
+    /// TODO: check that lut has a program
     fn verify_rec(&self, expr: &RecExpr<Self>) -> Result<(), String> {
         self.verify()?;
         for c in self.children() {
@@ -136,7 +143,7 @@ pub fn from_bitvec(bv: &BitVec) -> u64 {
 /// Evaluate a LUT with a bitvec input stored lsb first
 pub fn eval_lut_bv(p: u64, inputs: &BitVec) -> bool {
     let mut index = 0;
-    assert!(inputs.len() <= 6);
+    assert!(inputs.len() <= 64);
     for (i, input) in inputs.iter().enumerate() {
         if *input {
             index += 1 << i;
