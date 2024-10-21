@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod lut;
+pub mod rewrite;
 
 #[cfg(test)]
 mod tests {
