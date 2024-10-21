@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod cost;
 pub mod lut;
 pub mod rewrite;
 

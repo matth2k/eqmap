@@ -1,7 +1,7 @@
 use std::io::Read;
 
 use egg::*;
-use lut_synth::{lut, rewrite::all_rules};
+use lut_synth::{cost::LUTCostFn, lut, rewrite::all_rules};
 
 /// parse an expression, simplify it using egg, and pretty print it back out
 fn simplify(s: &str) -> String {
@@ -20,7 +20,7 @@ fn simplify(s: &str) -> String {
     println!("{:?}", runner.egraph);
 
     // use an Extractor to pick the best element of the root eclass
-    let extractor = Extractor::new(&runner.egraph, AstSize);
+    let extractor = Extractor::new(&runner.egraph, LUTCostFn);
     let (_best_cost, best) = extractor.find_best(root);
     let expl = runner.explain_equivalence(&expr, &best);
     println!("{}", expl);
