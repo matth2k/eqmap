@@ -18,7 +18,7 @@ impl CostFunction<LutLang> for LUTCostFn {
             LutLang::Mux(_) => u64::MAX,
         };
         enode.fold(op_cost, |sum, id| {
-            if costs(id) == u64::MAX || sum == u64::MAX {
+            if costs(id) > u64::MAX - sum {
                 u64::MAX
             } else {
                 sum + costs(id)
