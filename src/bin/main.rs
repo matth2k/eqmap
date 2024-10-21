@@ -17,15 +17,14 @@ fn simplify(s: &str) -> String {
 
     // the Runner knows which e-class the expression given with `with_expr` is in
     let root = runner.roots[0];
-    println!("{:?}", runner.egraph);
+    // println!("{:?}", runner.egraph);
 
     // use an Extractor to pick the best element of the root eclass
     let extractor = Extractor::new(&runner.egraph, LUTCostFn);
     let (_best_cost, best) = extractor.find_best(root);
-    let expl = runner.explain_equivalence(&expr, &best);
-    println!("{}", expl);
-    println!(
-        "Total num of nodes {}",
+    let _expl = runner.explain_equivalence(&expr, &best);
+    eprintln!(
+        "Saturated to {} nodes",
         runner.egraph.total_number_of_nodes()
     );
     best.to_string()
@@ -54,6 +53,13 @@ fn redundant_inputs() {
 fn main() -> std::io::Result<()> {
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf)?;
-    println!("{}", simplify(&buf));
+    for line in buf.lines() {
+        let line = line.trim();
+        if line.starts_with("//") || line.is_empty() {
+            continue;
+        }
+        let expr = line.split("//").next().unwrap();
+        println!("{}", simplify(expr));
+    }
     Ok(())
 }
