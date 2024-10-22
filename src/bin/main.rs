@@ -59,7 +59,7 @@ fn main() -> std::io::Result<()> {
             continue;
         }
         let expr = line.split("//").next().unwrap();
-        println!("{}", simplify(expr));
+        println!("{} => {}", expr, simplify(expr));
     }
     Ok(())
 }

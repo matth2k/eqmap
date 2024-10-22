@@ -1,7 +1,9 @@
 use super::analysis::LutAnalysis;
 use super::lut;
-use bitvec::{bitvec, order::Lsb0};
+use super::lut::to_bitvec;
+use bitvec::{bitvec, order::Lsb0, vec::BitVec};
 use egg::{rewrite, Applier, Rewrite, Var};
+use std::collections::{HashMap, HashSet};
 
 pub fn permute_groups() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
@@ -48,6 +50,20 @@ pub fn shannon_expansion() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules
 }
 
+pub fn general_cut_fusion() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
+    let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
+    // LUT fuse inputs (exclusive or not, sometimes the opposite of DSD)
+
+    // 2-(2,2) => 4-LUT
+    // 2-(2,3) => 5-LUT
+    // 2-(3,3) => 6-LUT
+    // 3-(2,2,2) => 6-LUT
+    rules.push(
+        rewrite!("lut3-3-3-fuse"; "(LUT ?rop ?s (LUT ?lp ?t ?a ?b) (LUT ?rp ?t ?c ?d))" => {FuseCut::new("?rop".parse().unwrap(), vec!["?s".parse().unwrap()], "?rp".parse().unwrap(), vec!["?t".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap()], "?lp".parse().unwrap(), vec!["?t".parse().unwrap(), "?a".parse().unwrap(), "?b".parse().unwrap()])}),
+    );
+    rules
+}
+
 pub fn redundant_inputs() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
     rules.push(rewrite!("lut2-redundant"; "(LUT ?p ?a ?a)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap()])}));
@@ -90,15 +106,9 @@ pub fn all_rules() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     // LUT permutation groups
     rules.append(&mut permute_groups());
 
-    // Condense Shannon expansion
+    // Condense Shannon expansion (a special case of fusing inputs)
     rules.append(&mut shannon_expansion());
-
-    // LUT fuse inputs (exclusive or not, sometimes the opposite of DSD)
-
-    // 2-(2,2) => 4-LUT
-    // 2-(2,3) => 5-LUT
-    // 2-(3,3) => 6-LUT
-    // 3-(2,2,2) => 6-LUT
+    rules.append(&mut general_cut_fusion());
 
     // LUT fuse non-mutually exclusive inputs (hard, opposite of DSD)
     rules
@@ -288,6 +298,151 @@ impl Applier<lut::LutLang, LutAnalysis> for ShannonCondense {
         let mut c = Vec::from(&[new_prog_id, sel]);
         c.append(&mut operands);
         assert!(c.len() == k + 2);
+        let new_lut = egraph.add(lut::LutLang::Lut(c.into()));
+
+        if egraph.union_trusted(eclass, new_lut, rule_name) {
+            vec![new_lut]
+        } else {
+            vec![]
+        }
+    }
+}
+
+/// A pattern for compiling a k-sized Cut of logic elements into a single LUT
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FuseCut {
+    /// The root/combining progra
+    root_p: Var,
+    /// Direct inputs to the root
+    root: Vec<Var>,
+    /// rhs leaf program
+    rhs_p: Var,
+    /// rhs leaf inputs
+    rhs: Vec<Var>,
+    /// lhs leaf program
+    lhs_p: Var,
+    /// lhs leaf inputs
+    lhs: Vec<Var>,
+}
+
+impl FuseCut {
+    pub fn new(
+        root_p: Var,
+        root: Vec<Var>,
+        rhs_p: Var,
+        rhs: Vec<Var>,
+        lhs_p: Var,
+        lhs: Vec<Var>,
+    ) -> Self {
+        Self {
+            root_p,
+            root,
+            rhs_p,
+            rhs,
+            lhs_p,
+            lhs,
+        }
+    }
+
+    /// Remember: bitvec is lsb first. Id arrays are msb first
+    fn get_input_vec(bv: &BitVec, pos_map: &HashMap<egg::Id, usize>, inputs: &[egg::Id]) -> BitVec {
+        assert!(inputs.len() <= 6);
+        assert!(inputs.len() <= bv.len());
+        let mut new_bv = bitvec!(usize, Lsb0; 0; inputs.len());
+        for (i, input) in inputs.iter().enumerate() {
+            let pos = pos_map[input];
+            new_bv.set(inputs.len() - 1 - i, *bv.get(pos).unwrap());
+        }
+        new_bv
+    }
+
+    /// Returns true if there are repeats in the operands
+    fn has_repeats(operands: &[egg::Id]) -> bool {
+        let vset: HashSet<egg::Id> = HashSet::from_iter(operands.iter().cloned());
+        vset.len() < operands.len()
+    }
+
+    fn get_sorted_map(vset: &HashSet<egg::Id>) -> HashMap<egg::Id, usize> {
+        let mut s = Vec::from_iter(vset.iter().cloned());
+        s.sort();
+        let mut pos_map: HashMap<egg::Id, usize> = HashMap::default();
+        for (i, v) in s.iter().enumerate() {
+            pos_map.insert(*v, i);
+        }
+        pos_map
+    }
+}
+
+impl Applier<lut::LutLang, LutAnalysis> for FuseCut {
+    fn apply_one(
+        &self,
+        egraph: &mut egg::EGraph<lut::LutLang, LutAnalysis>,
+        eclass: egg::Id,
+        subst: &egg::Subst,
+        _searcher_ast: Option<&egg::PatternAst<lut::LutLang>>,
+        rule_name: egg::Symbol,
+    ) -> Vec<egg::Id> {
+        let root_operands = self
+            .root
+            .iter()
+            .map(|v| subst[*v])
+            .collect::<Vec<egg::Id>>();
+        let lhs_operands = self.lhs.iter().map(|v| subst[*v]).collect::<Vec<egg::Id>>();
+        let rhs_operands = self.rhs.iter().map(|v| subst[*v]).collect::<Vec<egg::Id>>();
+        if FuseCut::has_repeats(&root_operands)
+            || FuseCut::has_repeats(&lhs_operands)
+            || FuseCut::has_repeats(&rhs_operands)
+        {
+            return vec![];
+        }
+        let root_program = egraph[subst[self.root_p]]
+            .data
+            .get_program()
+            .expect("Expected program");
+        let lhs_program = egraph[subst[self.lhs_p]]
+            .data
+            .get_program()
+            .expect("Expected program");
+        let rhs_program = egraph[subst[self.rhs_p]]
+            .data
+            .get_program()
+            .expect("Expected program");
+
+        let mut vset: HashSet<egg::Id> = HashSet::new();
+        for v in root_operands
+            .iter()
+            .chain(lhs_operands.iter())
+            .chain(rhs_operands.iter())
+        {
+            vset.insert(*v);
+        }
+        let nk = vset.len();
+        let pos_map = FuseCut::get_sorted_map(&vset);
+        assert!(nk <= 6);
+        let mut new_prog = bitvec!(usize, Lsb0; 0; 1 << nk);
+        // sweep inputs
+        for i in 0..(1 << nk) {
+            let bv = to_bitvec(i, nk);
+            let lhs_bv = FuseCut::get_input_vec(&bv, &pos_map, &lhs_operands);
+            let rhs_bv = FuseCut::get_input_vec(&bv, &pos_map, &rhs_operands);
+            let lhs_eval = lut::eval_lut_bv(lhs_program, &lhs_bv);
+            let rhs_eval = lut::eval_lut_bv(rhs_program, &rhs_bv);
+            let mut root_bv = bitvec!(usize, Lsb0; 0; root_operands.len() + 2);
+            root_bv.set(0, rhs_eval);
+            root_bv.set(1, lhs_eval);
+            let rbvl = root_bv.len();
+            for (j, root_op) in root_operands.iter().enumerate() {
+                let pos = pos_map[root_op];
+                root_bv.set(rbvl - 1 - j, *bv.get(pos).unwrap());
+            }
+            new_prog.set(i as usize, lut::eval_lut_bv(root_program, &root_bv));
+        }
+        let new_prog = lut::from_bitvec(&new_prog);
+        let mut c = vec![egraph.add(lut::LutLang::Program(new_prog)); nk + 1];
+        for (&k, &v) in pos_map.iter() {
+            c[v + 1] = k;
+        }
+
         let new_lut = egraph.add(lut::LutLang::Lut(c.into()));
 
         if egraph.union_trusted(eclass, new_lut, rule_name) {
