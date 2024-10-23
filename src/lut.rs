@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::analysis::LutAnalysis;
 use bitvec::prelude::*;
 use egg::define_language;
@@ -48,7 +50,7 @@ impl LutLang {
 
     /// Verify a LutLang expression [expr] rooted at [self]
     /// TODO: check that lut has a program
-    fn verify_rec(&self, expr: &RecExpr<Self>) -> Result<(), String> {
+    pub fn verify_rec(&self, expr: &RecExpr<Self>) -> Result<(), String> {
         self.verify()?;
         for c in self.children() {
             let t = &expr[*c];
@@ -112,6 +114,93 @@ impl LutLang {
             }
             _ => Err("Not a LUT".to_string()),
         }
+    }
+
+    fn eval(&self, inputs: &HashMap<String, bool>, expr: &RecExpr<Self>) -> bool {
+        match self {
+            LutLang::Const(b) => *b,
+            LutLang::Var(s) => *inputs.get(s.as_str()).unwrap(),
+            LutLang::Program(_) => panic!("Program node should not be evaluated"),
+            LutLang::DC => false,
+            LutLang::Nor(a) => {
+                let a0 = &a[0];
+                let a1 = &a[1];
+                !(expr[*a0].eval(inputs, expr) || expr[*a1].eval(inputs, expr))
+            }
+            LutLang::Mux(a) => {
+                let a0 = &a[0];
+                let a1 = &a[1];
+                let a2 = &a[2];
+                if expr[*a0].eval(inputs, expr) {
+                    expr[*a1].eval(inputs, expr)
+                } else {
+                    expr[*a2].eval(inputs, expr)
+                }
+            }
+            LutLang::Lut(a) => {
+                let p = match expr[*a.first().unwrap()] {
+                    LutLang::Program(p) => p,
+                    _ => panic!("First element of LUT must be a program"),
+                };
+                let x: Vec<bool> = a[1..]
+                    .iter()
+                    .map(|id| expr[*id].eval(inputs, expr))
+                    .collect();
+                eval_lut(p, &x)
+            }
+        }
+    }
+
+    pub fn func_equiv(
+        expr: &RecExpr<Self>,
+        other: &RecExpr<Self>,
+        inputs: &HashMap<String, bool>,
+    ) -> bool {
+        expr[(expr.as_ref().len() - 1).into()].eval(inputs, expr)
+            == other[(other.as_ref().len() - 1).into()].eval(inputs, other)
+    }
+
+    fn get_inputs(&self) -> Vec<String> {
+        match self {
+            LutLang::Var(s) => vec![s.as_str().to_string()],
+            _ => Vec::new(),
+        }
+    }
+
+    fn get_inputs_rec(&self, expr: &RecExpr<Self>) -> Vec<String> {
+        let mut inputs = self.get_inputs();
+        let mut children_inputs: Vec<String> = self
+            .children()
+            .iter()
+            .map(|c| expr[*c].get_inputs_rec(expr))
+            .flatten()
+            .collect();
+        inputs.append(&mut children_inputs);
+        inputs
+    }
+
+    pub fn get_input_set(&self, expr: &RecExpr<Self>) -> Vec<String> {
+        let mut inputs = self.get_inputs_rec(expr);
+        inputs.sort();
+        inputs.dedup();
+        inputs
+    }
+
+    pub fn func_equiv_always(expr: &RecExpr<Self>, other: &RecExpr<Self>) -> bool {
+        let root = &expr[(expr.as_ref().len() - 1).into()];
+        let inputs = root.get_input_set(&expr);
+        for i in 0..1 << inputs.len() {
+            let input_map = inputs
+                .iter()
+                .cloned()
+                .zip((0..inputs.len()).map(|j| (i >> j) & 1 == 1))
+                .collect();
+            let result = Self::func_equiv(&expr, &other, &input_map);
+            if !result {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -196,14 +285,4 @@ pub fn fuse_lut(p: &u64, q: &u64, i: usize) -> u64 {
 /// Fuse look-up tables [p] with [q]
 pub fn fuse_lut_heavy(p: &u64, q: &u64, pi: &[Id], qi: &[Id]) -> (u64, Vec<Id>) {
     todo!()
-}
-
-pub fn init() {
-    println!("Initializing LUT");
-    let mut expr: RecExpr<LutLang> = RecExpr::default();
-    let a = expr.add(LutLang::Var(Symbol::from("a")));
-    let b = expr.add(LutLang::Var(Symbol::from("b")));
-    let program = expr.add(LutLang::Program(0));
-    let f = expr.add(LutLang::Lut(vec![program, a, b].into()));
-    println!("LUT: {} {:?}", expr, f);
 }

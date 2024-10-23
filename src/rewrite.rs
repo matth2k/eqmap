@@ -59,8 +59,16 @@ pub fn general_cut_fusion() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     // 2-(3,3) => 6-LUT
     // 3-(2,2,2) => 6-LUT
     rules.push(
-        rewrite!("lut3-3-3-fuse"; "(LUT ?rop ?s (LUT ?lp ?t ?a ?b) (LUT ?rp ?t ?c ?d))" => {FuseCut::new("?rop".parse().unwrap(), vec!["?s".parse().unwrap()], "?rp".parse().unwrap(), vec!["?t".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap()], "?lp".parse().unwrap(), vec!["?t".parse().unwrap(), "?a".parse().unwrap(), "?b".parse().unwrap()])}),
+        rewrite!("lut3-3-5-fuse"; "(LUT ?rop ?s ?t (LUT ?rp ?a ?b ?c))" => {FuseCut::new("?rop".parse().unwrap(), vec!["?s".parse().unwrap(), "?t".parse().unwrap()], "?rp".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap()])}),
     );
+    rules.push(
+        rewrite!("lut4-3-6-fuse"; "(LUT ?rop ?s ?t ?u (LUT ?rp ?a ?b ?c))" => {FuseCut::new("?rop".parse().unwrap(), vec!["?s".parse().unwrap(), "?t".parse().unwrap(), "?u".parse().unwrap()], "?rp".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap()])}),
+    );
+    rules.push(
+        rewrite!("lut5-3-6-fuse"; "(LUT ?rop ?s ?t ?u ?a (LUT ?rp ?a ?b ?c))" => {FuseCut::new("?rop".parse().unwrap(), vec!["?s".parse().unwrap(), "?t".parse().unwrap(), "?u".parse().unwrap(), "?a".parse().unwrap()], "?rp".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap()])}),
+    );
+
+    // rules.push(rewrite!("lut3-2-2-fuse"; "(LUT 17351446362414033578 ?s1 ?s0 ?a ?b ?c ?d)" => "(LUT 1337 s1 (LUT 61642 ?s1 ?s0 ?c ?d) a b)"));
     rules
 }
 
@@ -319,28 +327,15 @@ pub struct FuseCut {
     rhs_p: Var,
     /// rhs leaf inputs
     rhs: Vec<Var>,
-    /// lhs leaf program
-    lhs_p: Var,
-    /// lhs leaf inputs
-    lhs: Vec<Var>,
 }
 
 impl FuseCut {
-    pub fn new(
-        root_p: Var,
-        root: Vec<Var>,
-        rhs_p: Var,
-        rhs: Vec<Var>,
-        lhs_p: Var,
-        lhs: Vec<Var>,
-    ) -> Self {
+    pub fn new(root_p: Var, root: Vec<Var>, rhs_p: Var, rhs: Vec<Var>) -> Self {
         Self {
             root_p,
             root,
             rhs_p,
             rhs,
-            lhs_p,
-            lhs,
         }
     }
 
@@ -387,19 +382,11 @@ impl Applier<lut::LutLang, LutAnalysis> for FuseCut {
             .iter()
             .map(|v| subst[*v])
             .collect::<Vec<egg::Id>>();
-        let lhs_operands = self.lhs.iter().map(|v| subst[*v]).collect::<Vec<egg::Id>>();
         let rhs_operands = self.rhs.iter().map(|v| subst[*v]).collect::<Vec<egg::Id>>();
-        if FuseCut::has_repeats(&root_operands)
-            || FuseCut::has_repeats(&lhs_operands)
-            || FuseCut::has_repeats(&rhs_operands)
-        {
+        if FuseCut::has_repeats(&root_operands) || FuseCut::has_repeats(&rhs_operands) {
             return vec![];
         }
         let root_program = egraph[subst[self.root_p]]
-            .data
-            .get_program()
-            .expect("Expected program");
-        let lhs_program = egraph[subst[self.lhs_p]]
             .data
             .get_program()
             .expect("Expected program");
@@ -409,27 +396,23 @@ impl Applier<lut::LutLang, LutAnalysis> for FuseCut {
             .expect("Expected program");
 
         let mut vset: HashSet<egg::Id> = HashSet::new();
-        for v in root_operands
-            .iter()
-            .chain(lhs_operands.iter())
-            .chain(rhs_operands.iter())
-        {
+        for v in root_operands.iter().chain(rhs_operands.iter()) {
             vset.insert(*v);
         }
         let nk = vset.len();
         let pos_map = FuseCut::get_sorted_map(&vset);
-        assert!(nk <= 6);
+        // Let this be a soft error, because we might not know at match time that we don't have a feasible cut
+        if nk > 6 {
+            return vec![];
+        }
         let mut new_prog = bitvec!(usize, Lsb0; 0; 1 << nk);
         // sweep inputs
         for i in 0..(1 << nk) {
             let bv = to_bitvec(i, nk);
-            let lhs_bv = FuseCut::get_input_vec(&bv, &pos_map, &lhs_operands);
             let rhs_bv = FuseCut::get_input_vec(&bv, &pos_map, &rhs_operands);
-            let lhs_eval = lut::eval_lut_bv(lhs_program, &lhs_bv);
             let rhs_eval = lut::eval_lut_bv(rhs_program, &rhs_bv);
-            let mut root_bv = bitvec!(usize, Lsb0; 0; root_operands.len() + 2);
+            let mut root_bv = bitvec!(usize, Lsb0; 0; root_operands.len() + 1);
             root_bv.set(0, rhs_eval);
-            root_bv.set(1, lhs_eval);
             let rbvl = root_bv.len();
             for (j, root_op) in root_operands.iter().enumerate() {
                 let pos = pos_map[root_op];
