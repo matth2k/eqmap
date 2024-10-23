@@ -1,14 +1,16 @@
 use super::lut;
 use egg::{Analysis, DidMerge};
 
-/// This is the data associated with an eclass
+/// An e-class is typically a boolean signal.
+/// However, we store constants and input aliases for folding.
+/// A [lut::LutLang::Program] should never really be rewritten, so storing programs allow us to quickly check if a class is a program and extract the program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LutAnalysisData {
-    /// If a class is a Program(u64), it should be alone
+    /// If a class is a Program(u64), it should be by itself
     program: Option<u64>,
-    /// If a class is a constant true or false, store it
+    /// Is Some(bool) when the class is equivalent to a constant `true` or `false`
     const_val: Option<bool>,
-    /// If a class is an input, store it
+    /// Eventually, this should be a vector so we can store aliases
     input: Option<String>,
 }
 
@@ -45,11 +47,14 @@ impl LutAnalysisData {
         }
     }
 
+    /// Returns true if the class is an input
     pub fn is_an_input(&self) -> bool {
         self.input.is_some()
     }
 }
 
+/// The analysis struct allows for discovering when signals are equivalent to constants or leaf inputs.
+/// Additonally, the struct assists in folding constant inputs to smaller LUTs.
 #[derive(Default)]
 pub struct LutAnalysis;
 impl Analysis<lut::LutLang> for LutAnalysis {

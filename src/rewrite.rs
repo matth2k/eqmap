@@ -5,6 +5,8 @@ use bitvec::{bitvec, order::Lsb0, vec::BitVec};
 use egg::{rewrite, Applier, Rewrite, Var};
 use std::collections::{HashMap, HashSet};
 
+/// Returns a list of rules for permuting inputs in LUTs. Each instance of these rules forms a group under composition (https://en.wikipedia.org/wiki/Symmetric_group).
+/// Each of these groups have k-1 generators.
 pub fn permute_groups() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
     // LUT permutation groups
@@ -38,6 +40,7 @@ pub fn permute_groups() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules
 }
 
+/// Condenses a k-Cut when it takes the form of a Shannon expansion
 pub fn shannon_expansion() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
 
@@ -50,6 +53,8 @@ pub fn shannon_expansion() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules
 }
 
+/// Generally condenses a k-Cut to a single LUT. This rule works even when inputs are not mutually-exclusive.
+/// When k > 6, the rule does no rewriting (instead of crashing).
 pub fn general_cut_fusion() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
     // LUT fuse inputs (exclusive or not, sometimes the opposite of DSD)
@@ -71,6 +76,7 @@ pub fn general_cut_fusion() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules
 }
 
+/// Known decompositions of LUTs based on disjoint support decompositions
 pub fn known_decompositions() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
     // https://people.eecs.berkeley.edu/~alanmi/publications/2008/iccad08_lp.pdf
@@ -79,6 +85,7 @@ pub fn known_decompositions() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules
 }
 
+/// Canonicalizes LUTs with redundant inputs
 pub fn redundant_inputs() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
     rules.push(rewrite!("lut2-redundant"; "(LUT ?p ?a ?a)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap()])}));
@@ -90,6 +97,7 @@ pub fn redundant_inputs() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules
 }
 
+/// Returns a list of all rules except for disjoint support decomposition
 pub fn all_rules_minus_dsd() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
 
@@ -129,7 +137,9 @@ pub fn all_rules_minus_dsd() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules
 }
 
-/// A rewrite applier for permuting input i with input i-1
+/// A rewrite applier for permuting input `pos` with input `pos - 1`
+/// `pos` is the position from the msb.
+/// This means that a `pos` of 1 refers to the input second from the left when printed to a string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermuteInput {
     /// Position of the input to permute
@@ -194,12 +204,14 @@ impl Applier<lut::LutLang, LutAnalysis> for PermuteInput {
     }
 }
 
-/// A rewrite applier for combining two inputs that are the same
+/// A rewrite applier for combining two inputs that are the same.
+/// The redundant inputs *must* be in the rightmost position in the LUT when printed to a string.
+/// This means the last two elements in `vars` must be the same
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CombineAlikeInputs {
-    /// The program redundant in var 0 and 1
+    /// The program
     program: Var,
-    /// The redundant inputs must be at position 0 and 1
+    /// The redundant inputs must be at the last two positions
     vars: Vec<Var>,
 }
 
@@ -260,17 +272,17 @@ impl Applier<lut::LutLang, LutAnalysis> for CombineAlikeInputs {
     }
 }
 
-/// A rewrite applier for combining two inputs that are the same.
-/// In short, we want q << (1 << k) | p
+/// A rewrite applier for condensing Shannon expansions into a single LUT.
+/// The matched eclass *must* be a 2:1 mux (i.e. `LUT 202`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShannonCondense {
-    /// The new sel input to add
+    /// The sel input
     sel: Var,
-    /// The program when sel=0
+    /// The program to use when sel=0
     p: Var,
-    /// The program when sel=1
+    /// The program to use when sel=1
     q: Var,
-    /// The inputs
+    /// The inputs (must not have duplicates)
     vars: Vec<Var>,
 }
 
@@ -323,16 +335,18 @@ impl Applier<lut::LutLang, LutAnalysis> for ShannonCondense {
     }
 }
 
-/// A pattern for compiling a k-sized Cut of logic elements into a single LUT
+/// A pattern for compiling a k-sized cut of logic elements into a single LUT
+/// This applier works even when inputs are not mutually-exclusive.
+/// If the inputs are mutually exclusive and form a cut larger than 6, the applier returns nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuseCut {
-    /// The root/combining progra
+    /// The root program
     root_p: Var,
     /// Direct inputs to the root
     root: Vec<Var>,
-    /// rhs leaf program
+    /// Child program
     rhs_p: Var,
-    /// rhs leaf inputs
+    /// Child inputs
     rhs: Vec<Var>,
 }
 
@@ -346,7 +360,9 @@ impl FuseCut {
         }
     }
 
-    /// Remember: bitvec is lsb first. Id arrays are msb first
+    /// Given the state of the cut set to the state `bv`, return the state of the inputs found in `inputs`.
+    /// `pos_map` contains the offsets of the inputs in larger cut contained in `bv`. The offsets are relative to the msb.
+    /// Finally, remember that `bv` is lsb first, whereas [egg::Id] arrays are msb first.
     fn get_input_vec(bv: &BitVec, pos_map: &HashMap<egg::Id, usize>, inputs: &[egg::Id]) -> BitVec {
         assert!(inputs.len() <= 6);
         assert!(inputs.len() <= bv.len());
@@ -364,7 +380,7 @@ impl FuseCut {
         vset.len() < operands.len()
     }
 
-    /// msb in the final lut as value 0 in the returned map
+    /// Returns of a map corresponding to the sorting of the [egg:Id] in `vset`
     fn get_sorted_map(vset: &HashSet<egg::Id>) -> HashMap<egg::Id, usize> {
         let mut s = Vec::from_iter(vset.iter().cloned());
         s.sort();

@@ -25,7 +25,7 @@ define_language! {
 }
 
 impl LutLang {
-    /// Verify a LutLang node
+    /// Verify the grammar of a single [LutLang] node
     fn verify(&self) -> Result<(), String> {
         match self {
             LutLang::Lut(list) => {
@@ -40,7 +40,9 @@ impl LutLang {
             }
             LutLang::Var(f) => {
                 if f.as_str() == "NOR" || f.as_str() == "LUT" || f.as_str() == "MUX" {
-                    return Err("Variable name is reserved".to_string());
+                    return Err(
+                        "Variable name is reserved. Check for missing parentheses.".to_string()
+                    );
                 }
                 Ok(())
             }
@@ -48,19 +50,31 @@ impl LutLang {
         }
     }
 
-    /// Verify a LutLang expression [expr] rooted at [self]
-    /// TODO: check that lut has a program
+    /// Recursively verify the grammar of a [LutLang] expression `expr` rooted at `self`
     pub fn verify_rec(&self, expr: &RecExpr<Self>) -> Result<(), String> {
         self.verify()?;
         for c in self.children() {
             let t = &expr[*c];
             t.verify_rec(expr)?;
+            match self {
+                LutLang::Lut(l) => {
+                    if let LutLang::Program(p) = expr[l[0]] {
+                        let k = l.len() - 1;
+                        if k < 6 && p >= (1 << (1 << k)) {
+                            return Err("Program too large for LUT".to_string());
+                        }
+                    } else {
+                        return Err("LUT must have a program".to_string());
+                    }
+                }
+                _ => (),
+            }
         }
         Ok(())
     }
 
-    /// Extract the program from a Lut node contained in expression [expr]
-    fn get_program(&self, expr: &RecExpr<Self>) -> Result<u64, String> {
+    /// Extract the program from a [LutLang::Lut] contained in expression `expr`
+    pub fn get_program(&self, expr: &RecExpr<Self>) -> Result<u64, String> {
         match self {
             LutLang::Lut(l) => {
                 self.verify()?;
@@ -74,7 +88,7 @@ impl LutLang {
         }
     }
 
-    /// Extract the program from a Lut node contained in [egraph]
+    /// Extract the program from a [LutLang::Lut] contained in `egraph`
     pub fn get_program_in_egraph(
         &self,
         egraph: &egg::EGraph<LutLang, LutAnalysis>,
@@ -91,7 +105,7 @@ impl LutLang {
         }
     }
 
-    /// Extract the program from a Lut node contained in [egraph]
+    /// Extract the operand class ids from a [LutLang::Lut] contained in `egraph`
     pub fn get_operand_classes(
         &self,
         _egraph: &egg::EGraph<LutLang, LutAnalysis>,
@@ -105,7 +119,7 @@ impl LutLang {
         }
     }
 
-    /// Identify a node as a k-LUT and return k
+    /// Returns the fan-in of a [LutLang::Lut]
     fn get_lut_size(&self) -> Result<usize, String> {
         match self {
             LutLang::Lut(l) => {
@@ -116,6 +130,7 @@ impl LutLang {
         }
     }
 
+    /// Evaluates the boolean value of a [LutLang] node contained in `expr` given the input state `inputs`
     fn eval(&self, inputs: &HashMap<String, bool>, expr: &RecExpr<Self>) -> bool {
         match self {
             LutLang::Const(b) => *b,
@@ -204,7 +219,13 @@ impl LutLang {
     }
 }
 
-/// [inputs] should be big-end first
+/// Verify the grammar of a [LutLang] expression from its root
+pub fn verify_expr(expr: &RecExpr<LutLang>) -> Result<(), String> {
+    expr.as_ref().last().unwrap().verify_rec(expr)?;
+    Ok(())
+}
+
+/// Evaluates the boolean value of a Lut program given a slice of [bool] inputs (msb first).
 pub fn eval_lut(p: u64, inputs: &[bool]) -> bool {
     let mut index = 0;
     for (i, input) in inputs.iter().rev().enumerate() {
@@ -215,7 +236,7 @@ pub fn eval_lut(p: u64, inputs: &[bool]) -> bool {
     (p >> index) & 1 == 1
 }
 
-/// Convert a u64 LUT to a bitvec
+/// Convert a [u64] LUT program to a lsb-first [BitVec] of length `capacity`
 pub fn to_bitvec(p: u64, capacity: usize) -> BitVec {
     assert!(capacity <= 64);
     let mut bv: BitVec = bitvec!(usize, Lsb0; 0; capacity);
@@ -223,13 +244,13 @@ pub fn to_bitvec(p: u64, capacity: usize) -> BitVec {
     bv
 }
 
-/// Convert a bitvec to a u64 LUT
+/// Convert a lsb-first [BitVec] LUT program to a [u64]
 pub fn from_bitvec(bv: &BitVec) -> u64 {
     assert!(bv.len() <= 64);
     bv[0..bv.len()].load::<u64>()
 }
 
-/// Evaluate a LUT with a bitvec input stored lsb first
+/// Evaluates the boolean value of a LUT program given a [BitVec] (lsb first).
 pub fn eval_lut_bv(p: u64, inputs: &BitVec) -> bool {
     let mut index = 0;
     assert!(inputs.len() <= 64);
@@ -241,7 +262,7 @@ pub fn eval_lut_bv(p: u64, inputs: &BitVec) -> bool {
     (p >> index) & 1 == 1
 }
 
-/// Return the LUT with the [msb] input tied to [v]
+/// Return a partially-evaluated LUT program with the `msb` input tied to the constant `v`
 pub fn eval_lut_const_input(p: &u64, msb: usize, v: bool) -> u64 {
     assert!(msb <= 5);
     assert_eq!(msb >> (1 << (msb + 1)), 0);
@@ -252,9 +273,8 @@ pub fn eval_lut_const_input(p: &u64, msb: usize, v: bool) -> u64 {
     }
 }
 
-/// Swap the truth table for input i and input (i+1).
+/// Swap the truth table for input `pos` and input `pos + 1`, where `pos` is offset from the lsb.
 /// Together these generate the permutation group.
-/// [pos] 0 is the lsb.
 pub fn swap_pos(bv: &u64, k: usize, pos: usize) -> u64 {
     assert!(pos < k - 1);
     let mut list: Vec<BitVec> = Vec::new();
@@ -273,16 +293,4 @@ pub fn swap_pos(bv: &u64, k: usize, pos: usize) -> u64 {
         nbv.set(index, eval_lut_bv(*bv, &to_bitvec(i as u64, k)));
     }
     from_bitvec(&nbv)
-}
-
-/// Fuse look-up tables [p] into [q] at position [i]
-/// Will crash if the result would be >= 2**64.
-/// Only works for mutually exclusive input groups.
-pub fn fuse_lut(p: &u64, q: &u64, i: usize) -> u64 {
-    (p << (1 << i)) | q
-}
-
-/// Fuse look-up tables [p] with [q]
-pub fn fuse_lut_heavy(p: &u64, q: &u64, pi: &[Id], qi: &[Id]) -> (u64, Vec<Id>) {
-    todo!()
 }

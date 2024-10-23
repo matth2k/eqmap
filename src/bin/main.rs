@@ -10,7 +10,7 @@ use std::{
     path::PathBuf,
 };
 
-/// simplify expr using egg, and pretty print it back out
+/// simplify `expr` using egg with at most `k` fan-in on LUTs
 fn simplify_expr<A>(
     expr: &RecExpr<lut::LutLang>,
     rules: &Vec<Rewrite<lut::LutLang, A>>,
@@ -40,7 +40,7 @@ where
     (best, expl)
 }
 
-/// parse an expression, simplify it using egg, and pretty print it back out
+/// parse an expression, simplify it with DSD and at most 4 fan-in, and pretty print it back out
 fn simplify(s: &str) -> String {
     // parse the expression, the type annotation tells it which Language to use
     let expr: RecExpr<lut::LutLang> = s.parse().unwrap();
@@ -98,7 +98,7 @@ fn test_incorrect_dsd() {
     }
 }
 
-/// Simple program to greet a person
+/// Lut-Synth Args
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -149,6 +149,12 @@ fn main() -> std::io::Result<()> {
         }
         let expr = line.split("//").next().unwrap();
         let expr: RecExpr<lut::LutLang> = expr.parse().unwrap();
+
+        if !args.no_verify {
+            lut::verify_expr(&expr)
+                .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+        }
+
         let (simplified, expl) = simplify_expr(&expr, &rules, args.k);
 
         if args.verbose {
