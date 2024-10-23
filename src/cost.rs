@@ -1,8 +1,20 @@
 use egg::{CostFunction, Id, Language};
 
 use super::lut::LutLang;
-pub struct LUTKCostFn<const K: usize>;
-impl<const K: usize> CostFunction<LutLang> for LUTKCostFn<K> {
+pub struct KLUTCostFn {
+    k: usize,
+}
+
+impl KLUTCostFn {
+    pub fn new(k: usize) -> Self {
+        if k < 1 || k > 6 {
+            panic!("k must be between 1 and 6");
+        }
+        Self { k }
+    }
+}
+
+impl CostFunction<LutLang> for KLUTCostFn {
     type Cost = u64;
     fn cost<C>(&mut self, enode: &LutLang, mut costs: C) -> Self::Cost
     where
@@ -10,7 +22,7 @@ impl<const K: usize> CostFunction<LutLang> for LUTKCostFn<K> {
     {
         let op_cost = match enode {
             LutLang::Lut(l) => {
-                if l.len() <= K + 1 {
+                if l.len() <= self.k + 1 {
                     l.len() as u64
                 } else {
                     u64::MAX

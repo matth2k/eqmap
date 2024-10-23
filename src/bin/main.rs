@@ -1,7 +1,7 @@
 use clap::Parser;
 use egg::*;
 use lut_synth::{
-    cost::LUTKCostFn,
+    cost::KLUTCostFn,
     lut,
     rewrite::{all_rules_minus_dsd, known_decompositions},
 };
@@ -14,6 +14,7 @@ use std::{
 fn simplify_expr<A>(
     expr: &RecExpr<lut::LutLang>,
     rules: &Vec<Rewrite<lut::LutLang, A>>,
+    k: usize,
 ) -> (RecExpr<lut::LutLang>, Explanation<lut::LutLang>)
 where
     A: Analysis<lut::LutLang> + std::default::Default,
@@ -29,7 +30,7 @@ where
     let root = runner.roots[0];
 
     // use an Extractor to pick the best element of the root eclass
-    let extractor = Extractor::new(&runner.egraph, LUTKCostFn::<4>);
+    let extractor = Extractor::new(&runner.egraph, KLUTCostFn::new(k));
     let (_best_cost, best) = extractor.find_best(root);
     let expl = runner.explain_equivalence(&expr, &best);
     eprintln!(
@@ -46,7 +47,7 @@ fn simplify(s: &str) -> String {
     let mut rules = all_rules_minus_dsd();
     rules.append(&mut known_decompositions());
 
-    simplify_expr(&expr, &rules).0.to_string()
+    simplify_expr(&expr, &rules, 4).0.to_string()
 }
 
 #[test]
@@ -85,6 +86,18 @@ fn test_dsd() {
     assert!(lut::LutLang::func_equiv_always(&other, &dsd));
 }
 
+#[test]
+fn test_incorrect_dsd() {
+    let expr: RecExpr<lut::LutLang> = "(MUX s1 (MUX s0 a b) (MUX s0 c d))".parse().unwrap();
+    let p: u64 = 18374951396690406058;
+    for i in 0..64 {
+        let pos_to_flip: usize = i;
+        let p = p ^ (1 << pos_to_flip);
+        let other: RecExpr<lut::LutLang> = format!("(LUT {} s1 s0 a b c d)", p).parse().unwrap();
+        assert!(!lut::LutLang::func_equiv_always(&expr, &other));
+    }
+}
+
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -103,6 +116,10 @@ struct Args {
     /// Print explanations
     #[arg(short = 'v', long, default_value_t = false)]
     verbose: bool,
+
+    /// Max fan in size for LUTs
+    #[arg(short = 'k', long, default_value_t = 4)]
+    k: usize,
 }
 
 fn main() -> std::io::Result<()> {
@@ -132,7 +149,7 @@ fn main() -> std::io::Result<()> {
         }
         let expr = line.split("//").next().unwrap();
         let expr: RecExpr<lut::LutLang> = expr.parse().unwrap();
-        let (simplified, expl) = simplify_expr(&expr, &rules);
+        let (simplified, expl) = simplify_expr(&expr, &rules, args.k);
 
         if args.verbose {
             eprintln!("{}", expl.to_string());
