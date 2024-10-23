@@ -91,7 +91,7 @@ fn p_q_cut_fuse(p: usize, q: usize) -> Rewrite<lut::LutLang, LutAnalysis> {
         "?qp".parse().unwrap(),
         qi.iter().map(|f| f.parse().unwrap()).collect(),
     );
-    rewrite!(format!("lut{}-{}-fuse", p, q); pattern => applier)
+    rewrite!(format!("lut{}-{}-fuse", p + 1, q); pattern => applier)
 }
 
 /// Generally condenses a k-Cut to a single LUT. This rule works even when inputs are not mutually-exclusive.
