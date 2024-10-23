@@ -137,8 +137,7 @@ pub fn all_rules_minus_dsd() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules
 }
 
-/// A rewrite applier for permuting input `pos` with input `pos - 1`
-/// `pos` is the position from the msb.
+/// A rewrite applier for permuting input `pos` with input `pos - 1` from the msb.
 /// This means that a `pos` of 1 refers to the input second from the left when printed to a string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermuteInput {
