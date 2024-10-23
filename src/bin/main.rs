@@ -1,28 +1,35 @@
 use clap::Parser;
 use egg::*;
-use lut_synth::{cost::LUTKCostFn, lut, rewrite::all_rules};
+use lut_synth::{
+    cost::LUTKCostFn,
+    lut,
+    rewrite::{all_rules_minus_dsd, known_decompositions},
+};
 use std::{
     io::{IsTerminal, Read},
     path::PathBuf,
 };
 
 /// simplify expr using egg, and pretty print it back out
-fn simplify_expr(
+fn simplify_expr<A>(
     expr: &RecExpr<lut::LutLang>,
-) -> (RecExpr<lut::LutLang>, Explanation<lut::LutLang>) {
+    rules: &Vec<Rewrite<lut::LutLang, A>>,
+) -> (RecExpr<lut::LutLang>, Explanation<lut::LutLang>)
+where
+    A: Analysis<lut::LutLang> + std::default::Default,
+{
     // simplify the expression using a Runner, which creates an e-graph with
     // the given expression and runs the given rules over it
     let mut runner = Runner::default()
         .with_explanations_enabled()
         .with_expr(&expr)
-        .run(&all_rules());
+        .run(rules);
 
     // the Runner knows which e-class the expression given with `with_expr` is in
     let root = runner.roots[0];
-    // println!("{:?}", runner.egraph);
 
     // use an Extractor to pick the best element of the root eclass
-    let extractor = Extractor::new(&runner.egraph, LUTKCostFn::<6>);
+    let extractor = Extractor::new(&runner.egraph, LUTKCostFn::<4>);
     let (_best_cost, best) = extractor.find_best(root);
     let expl = runner.explain_equivalence(&expr, &best);
     eprintln!(
@@ -36,8 +43,10 @@ fn simplify_expr(
 fn simplify(s: &str) -> String {
     // parse the expression, the type annotation tells it which Language to use
     let expr: RecExpr<lut::LutLang> = s.parse().unwrap();
+    let mut rules = all_rules_minus_dsd();
+    rules.append(&mut known_decompositions());
 
-    simplify_expr(&expr).0.to_string()
+    simplify_expr(&expr, &rules).0.to_string()
 }
 
 #[test]
@@ -67,16 +76,14 @@ fn test_eval() {
     assert!(lut::LutLang::func_equiv_always(&expr, &other));
 }
 
-// #[test]
-// fn test_dsd() {
-//     let expr: RecExpr<lut::LutLang> = "(MUX s1 (MUX s0 a b) (MUX s0 c d))".parse().unwrap();
-//     let other: RecExpr<lut::LutLang> = "(LUT 18374951396690406058 s1 s0 a b c d)".parse().unwrap();
-//     let dsd: RecExpr<lut::LutLang> = "(LUT 1337 s1 (LUT 61642 ?s1 ?s0 ?c ?d) a b)"
-//         .parse()
-//         .unwrap();
-//     assert!(lut::LutLang::func_equiv_always(&expr, &other));
-//     assert!(lut::LutLang::func_equiv_always(&other, &dsd));
-// }
+#[test]
+fn test_dsd() {
+    let expr: RecExpr<lut::LutLang> = "(MUX s1 (MUX s0 a b) (MUX s0 c d))".parse().unwrap();
+    let other: RecExpr<lut::LutLang> = "(LUT 18374951396690406058 s1 s0 a b c d)".parse().unwrap();
+    assert!(lut::LutLang::func_equiv_always(&expr, &other));
+    let dsd: RecExpr<lut::LutLang> = "(LUT 51952 s1 (LUT 61642 s1 s0 c d) a b)".parse().unwrap();
+    assert!(lut::LutLang::func_equiv_always(&other, &dsd));
+}
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -85,9 +92,17 @@ struct Args {
     /// Path to input file. If not provided, reads from stdin
     input: Option<PathBuf>,
 
-    /// Verify functionality of the output
-    #[arg(short, long, default_value_t = false)]
+    /// Don't verify functionality of the output
+    #[arg(short = 'c', long, default_value_t = false)]
     no_verify: bool,
+
+    /// Don't use disjoint set decompositions
+    #[arg(short, long, default_value_t = false)]
+    no_dsd: bool,
+
+    /// Print explanations
+    #[arg(short = 'v', long, default_value_t = false)]
+    verbose: bool,
 }
 
 fn main() -> std::io::Result<()> {
@@ -105,6 +120,11 @@ fn main() -> std::io::Result<()> {
         }
     }
 
+    let mut rules = all_rules_minus_dsd();
+    if !args.no_dsd {
+        rules.append(&mut known_decompositions());
+    }
+
     for line in buf.lines() {
         let line = line.trim();
         if line.starts_with("//") || line.is_empty() {
@@ -112,11 +132,18 @@ fn main() -> std::io::Result<()> {
         }
         let expr = line.split("//").next().unwrap();
         let expr: RecExpr<lut::LutLang> = expr.parse().unwrap();
-        let (simplified, expl) = simplify_expr(&expr);
-        println!("{} => {}", expr.to_string(), simplified.to_string());
+        let (simplified, expl) = simplify_expr(&expr, &rules);
+
+        if args.verbose {
+            eprintln!("{}", expl.to_string());
+        } else {
+            eprintln!("{} => ", expr.to_string());
+        }
+
+        println!("{}", simplified.to_string());
 
         // Verify functionality
-        if !args.no_verify {
+        if args.no_verify {
             eprintln!("Skipping functonality tests...");
         } else {
             let result = lut::LutLang::func_equiv_always(&expr, &simplified);

@@ -68,7 +68,14 @@ pub fn general_cut_fusion() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
         rewrite!("lut5-3-6-fuse"; "(LUT ?rop ?s ?t ?u ?a (LUT ?rp ?a ?b ?c))" => {FuseCut::new("?rop".parse().unwrap(), vec!["?s".parse().unwrap(), "?t".parse().unwrap(), "?u".parse().unwrap(), "?a".parse().unwrap()], "?rp".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap()])}),
     );
 
-    // rules.push(rewrite!("lut3-2-2-fuse"; "(LUT 17351446362414033578 ?s1 ?s0 ?a ?b ?c ?d)" => "(LUT 1337 s1 (LUT 61642 ?s1 ?s0 ?c ?d) a b)"));
+    rules
+}
+
+pub fn known_decompositions() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
+    let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
+    // https://people.eecs.berkeley.edu/~alanmi/publications/2008/iccad08_lp.pdf
+    // Boolean Factoring and Decomposition of Logic Networks
+    rules.push(rewrite!("mux4-1-dsd"; "(LUT 18374951396690406058 ?s1 ?s0 ?a ?b ?c ?d)" => "(LUT 51952 ?s1 (LUT 61642 ?s1 ?s0 ?c ?d) ?a ?b)"));
     rules
 }
 
@@ -83,7 +90,7 @@ pub fn redundant_inputs() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules
 }
 
-pub fn all_rules() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
+pub fn all_rules_minus_dsd() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
 
     // Logic element conversions
