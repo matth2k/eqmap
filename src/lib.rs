@@ -1,3 +1,13 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
+/*!
+
+`lut-synth`: LUT Network Synthesis with E-Graphs
+
+TODO: overview, tutorial, testing, research papers
+
+*/
+
 pub mod analysis;
 pub mod cost;
 pub mod lut;
