@@ -11,6 +11,7 @@ use egg::Symbol;
 const OR_TABLE: u64 = 0xFFFFFFFFFFFFFFFE;
 const NOR_TABLE: u64 = 0x1;
 
+/// Definitions of e-node types. [Program] is the only node type that is not a net/signal.
 define_language! {
     pub enum LutLang {
         Const(bool),
@@ -19,7 +20,8 @@ define_language! {
         "x" = DC,
         "NOR" = Nor([Id; 2]),
         "MUX" = Mux([Id; 3]), // s, a, b
-        // "NAND" = Nand([Id; 2]),
+        "AND" = And([Id; 2]),
+        "NOT" = Not([Id; 1]),
         "LUT" = Lut(Box<[Id]>), // Program is first
     }
 }
@@ -38,14 +40,15 @@ impl LutLang {
                     Ok(())
                 }
             }
-            LutLang::Var(f) => {
-                if f.as_str() == "NOR" || f.as_str() == "LUT" || f.as_str() == "MUX" {
+            LutLang::Var(f) => match f.as_str() {
+                "NOR" | "LUT" | "MUX" | "AND" | "NOT" => {
                     return Err(
-                        "Variable name is reserved. Check for missing parentheses.".to_string()
+                        "Variable name is already reserved. Check for missing parentheses."
+                            .to_string(),
                     );
                 }
-                Ok(())
-            }
+                _ => Ok(()),
+            },
             _ => Ok(()),
         }
     }
@@ -141,6 +144,15 @@ impl LutLang {
                 let a0 = &a[0];
                 let a1 = &a[1];
                 !(expr[*a0].eval(inputs, expr) || expr[*a1].eval(inputs, expr))
+            }
+            LutLang::And(a) => {
+                let a0 = &a[0];
+                let a1 = &a[1];
+                expr[*a0].eval(inputs, expr) && expr[*a1].eval(inputs, expr)
+            }
+            LutLang::Not(a) => {
+                let a0 = &a[0];
+                !expr[*a0].eval(inputs, expr)
             }
             LutLang::Mux(a) => {
                 let a0 = &a[0];

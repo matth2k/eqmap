@@ -26,7 +26,7 @@ impl CostFunction<LutLang> for KLUTCostFn {
         let op_cost = match enode {
             LutLang::Lut(l) => {
                 if l.len() <= self.k + 1 {
-                    l.len() as u64
+                    (l.len() - 1) as u64
                 } else {
                     u64::MAX
                 }
@@ -35,8 +35,7 @@ impl CostFunction<LutLang> for KLUTCostFn {
             LutLang::Const(_) => 0,
             LutLang::Var(_) => 1,
             LutLang::DC => 0,
-            LutLang::Nor(_) => u64::MAX,
-            LutLang::Mux(_) => u64::MAX,
+            _ => u64::MAX,
         };
         enode.fold(op_cost, |sum, id| {
             if costs(id) > u64::MAX - sum {
