@@ -346,7 +346,7 @@ impl FuseCut {
         let mut new_bv = bitvec!(usize, Lsb0; 0; inputs.len());
         for (i, input) in inputs.iter().enumerate() {
             let pos = pos_map[input];
-            new_bv.set(inputs.len() - 1 - i, *bv.get(pos).unwrap());
+            new_bv.set(inputs.len() - 1 - i, *bv.get(bv.len() - 1 - pos).unwrap());
         }
         new_bv
     }
@@ -357,6 +357,7 @@ impl FuseCut {
         vset.len() < operands.len()
     }
 
+    /// msb in the final lut as value 0 in the returned map
     fn get_sorted_map(vset: &HashSet<egg::Id>) -> HashMap<egg::Id, usize> {
         let mut s = Vec::from_iter(vset.iter().cloned());
         s.sort();
@@ -400,11 +401,11 @@ impl Applier<lut::LutLang, LutAnalysis> for FuseCut {
             vset.insert(*v);
         }
         let nk = vset.len();
-        let pos_map = FuseCut::get_sorted_map(&vset);
         // Let this be a soft error, because we might not know at match time that we don't have a feasible cut
         if nk > 6 {
             return vec![];
         }
+        let pos_map = FuseCut::get_sorted_map(&vset);
         let mut new_prog = bitvec!(usize, Lsb0; 0; 1 << nk);
         // sweep inputs
         for i in 0..(1 << nk) {
@@ -416,7 +417,7 @@ impl Applier<lut::LutLang, LutAnalysis> for FuseCut {
             let rbvl = root_bv.len();
             for (j, root_op) in root_operands.iter().enumerate() {
                 let pos = pos_map[root_op];
-                root_bv.set(rbvl - 1 - j, *bv.get(pos).unwrap());
+                root_bv.set(rbvl - 1 - j, *bv.get(bv.len() - 1 - pos).unwrap());
             }
             new_prog.set(i as usize, lut::eval_lut_bv(root_program, &root_bv));
         }
