@@ -2,8 +2,25 @@ use super::analysis::LutAnalysis;
 use super::lut;
 use super::lut::to_bitvec;
 use bitvec::{bitvec, order::Lsb0, vec::BitVec};
-use egg::{rewrite, Applier, Rewrite, Var};
+use egg::{rewrite, Analysis, Applier, Pattern, Rewrite, Var};
 use std::collections::{HashMap, HashSet};
+
+/// Returns a list of structural mappings of logic functions to LUTs.
+/// For example, MUXes are mapped to 3-LUTs and AND gates to 2-LUTs.
+pub fn struct_lut_map<A>() -> Vec<Rewrite<lut::LutLang, A>>
+where
+    A: Analysis<lut::LutLang> + std::default::Default,
+{
+    let mut rules: Vec<Rewrite<lut::LutLang, A>> = Vec::new();
+    // Logic element conversions
+    rules.push(rewrite!("nor2-conversion"; "(NOR ?a ?b)" => "(LUT 1 ?a ?b)"));
+    rules.push(rewrite!("and2-conversion"; "(AND ?a ?b)" => "(LUT 8 ?a ?b)"));
+    rules.push(rewrite!("inverter-conversion"; "(NOT ?a)" => "(LUT 1 ?a)"));
+    // s? a : b
+    rules.push(rewrite!("mux2-1-conversion"; "(MUX ?s ?a ?b)" => "(LUT 202 ?s ?a ?b)"));
+
+    rules
+}
 
 /// Returns a list of rules for permuting inputs in LUTs. Each instance of these rules forms a group under composition (https://en.wikipedia.org/wiki/Symmetric_group).
 /// Each of these groups have k-1 generators.
@@ -53,25 +70,41 @@ pub fn shannon_expansion() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules
 }
 
+fn p_q_cut_fuse(p: usize, q: usize) -> Rewrite<lut::LutLang, LutAnalysis> {
+    assert!(p <= 6);
+    assert!(q <= 6);
+    let mut pi: Vec<String> = Vec::new();
+    let mut qi: Vec<String> = Vec::new();
+    for i in 0..p {
+        pi.push(format!("?p{}", i));
+    }
+    for i in 0..q {
+        qi.push(format!("?q{}", i));
+    }
+    let pattern: Pattern<lut::LutLang> =
+        format!("(LUT ?pp {} (LUT ?qp {}))", pi.join(" "), qi.join(" "))
+            .parse()
+            .unwrap();
+    let applier = FuseCut::new(
+        "?pp".parse().unwrap(),
+        pi.iter().map(|f| f.parse().unwrap()).collect(),
+        "?qp".parse().unwrap(),
+        qi.iter().map(|f| f.parse().unwrap()).collect(),
+    );
+    rewrite!(format!("lut{}-{}-fuse", p, q); pattern => applier)
+}
+
 /// Generally condenses a k-Cut to a single LUT. This rule works even when inputs are not mutually-exclusive.
 /// When k > 6, the rule does no rewriting (instead of crashing).
 pub fn general_cut_fusion() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
     // LUT fuse inputs (exclusive or not, sometimes the opposite of DSD)
 
-    // 2-(2,2) => 4-LUT
-    // 2-(2,3) => 5-LUT
-    // 2-(3,3) => 6-LUT
-    // 3-(2,2,2) => 6-LUT
-    rules.push(
-        rewrite!("lut3-3-5-fuse"; "(LUT ?rop ?s ?t (LUT ?rp ?a ?b ?c))" => {FuseCut::new("?rop".parse().unwrap(), vec!["?s".parse().unwrap(), "?t".parse().unwrap()], "?rp".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap()])}),
-    );
-    rules.push(
-        rewrite!("lut4-3-6-fuse"; "(LUT ?rop ?s ?t ?u (LUT ?rp ?a ?b ?c))" => {FuseCut::new("?rop".parse().unwrap(), vec!["?s".parse().unwrap(), "?t".parse().unwrap(), "?u".parse().unwrap()], "?rp".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap()])}),
-    );
-    rules.push(
-        rewrite!("lut5-3-6-fuse"; "(LUT ?rop ?s ?t ?u ?a (LUT ?rp ?a ?b ?c))" => {FuseCut::new("?rop".parse().unwrap(), vec!["?s".parse().unwrap(), "?t".parse().unwrap(), "?u".parse().unwrap(), "?a".parse().unwrap()], "?rp".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap()])}),
-    );
+    for p in 0..6 {
+        for q in 1..6 {
+            rules.push(p_q_cut_fuse(p, q));
+        }
+    }
 
     rules
 }
@@ -101,10 +134,8 @@ pub fn redundant_inputs() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
 pub fn all_rules_minus_dsd() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
 
-    // Logic element conversions
-    rules.push(rewrite!("nor2-conversion"; "(NOR ?a ?b)" => "(LUT 1 ?a ?b)"));
-    // s? a : b
-    rules.push(rewrite!("mux2-1-conversion"; "(MUX ?s ?a ?b)" => "(LUT 202 ?s ?a ?b)"));
+    // Structural mappings of gates to LUTs
+    rules.append(&mut struct_lut_map());
 
     // Evaluate constant programs
     rules.push(rewrite!("lut2-const"; "(LUT 0 ?a ?b)" => "false"));
