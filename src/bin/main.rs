@@ -6,7 +6,7 @@ use lut_synth::{
     rewrite::{all_rules_minus_dsd, known_decompositions},
 };
 use std::{
-    io::{IsTerminal, Read},
+    io::{IsTerminal, Read, Write},
     path::PathBuf,
     time::Duration,
 };
@@ -27,7 +27,7 @@ where
     // simplify the expression using a Runner, which creates an e-graph with
     // the given expression and runs the given rules over it
 
-    let mut runner = if gen_proof {
+    let runner = if gen_proof {
         Runner::default().with_explanations_enabled()
     } else {
         Runner::default().with_explanations_disabled()
@@ -51,7 +51,7 @@ where
         None
     };
     eprintln!(
-        "Grown to {} nodes with reason {:?}",
+        "INFO: Grown to {} nodes with reason {:?}",
         runner.egraph.total_number_of_nodes(),
         runner
             .stop_reason
@@ -144,15 +144,22 @@ struct Args {
     k: usize,
 
     /// Timeout in seconds for each expression
-    #[arg(short = 't', long, default_value_t = 25)]
+    #[arg(short = 't', long,
+        default_value_t = 
+        if cfg!(debug_assertions) {
+            45
+        } else {
+            15
+        })
+    ]
     timeout: u64,
 
     /// Maximum number of nodes in graph
-    #[arg(short = 's', long, default_value_t = 30_000)]
+    #[arg(short = 's', long, default_value_t = 20_000)]
     node_limit: usize,
 
     /// Maximum number of rewrite iterations
-    #[arg(short = 'n', long, default_value_t = 35)]
+    #[arg(short = 'n', long, default_value_t = 30)]
     iter_limit: usize,
 }
 
@@ -160,12 +167,17 @@ fn main() -> std::io::Result<()> {
     let args = Args::parse();
     let mut buf = String::new();
 
+    if cfg!(debug_assertions) {
+        eprintln!("WARNING: Running with debug assertions enabled");
+    }
+
     if args.input.is_some() {
         std::fs::File::open(args.input.unwrap())?.read_to_string(&mut buf)?;
     } else {
         let mut stdin = std::io::stdin();
         if stdin.is_terminal() {
-            while stdin.read_line(&mut buf)? <= 1 {}
+            print!("> "); std::io::stdout().flush()?;
+            while stdin.read_line(&mut buf)? <= 2 {print!("> "); std::io::stdout().flush()?;}
         } else {
             stdin.read_to_string(&mut buf)?;
         }
@@ -177,8 +189,8 @@ fn main() -> std::io::Result<()> {
     }
 
     if args.verbose {
-        eprintln!("Running with {} rewrite rules", rules.len());
-        eprintln!("DSD is {}", if args.no_dsd { "OFF" } else { "ON" });
+        eprintln!("INFO: Running with {} rewrite rules", rules.len());
+        eprintln!("INFO: DSD rewrites {}", if args.no_dsd { "OFF" } else { "ON" });
     }
 
     for line in buf.lines() {
@@ -213,8 +225,8 @@ fn main() -> std::io::Result<()> {
         };
 
         if args.verbose {
-            eprintln!("{}", expl.as_ref().unwrap());
-            eprintln!("============================================================");
+            eprintln!("INFO: {}", expl.as_ref().unwrap().replace("\n", "\nINFO: "));
+            eprintln!("INFO: ============================================================");
         } else {
             eprintln!("{} => ", expr.to_string());
         }
@@ -223,13 +235,13 @@ fn main() -> std::io::Result<()> {
 
         // Verify functionality
         if args.no_verify {
-            eprintln!("Skipping functionality tests...");
+            eprintln!("INFO: Skipping functionality tests...");
         } else {
             let result = lut::LutLang::func_equiv_always(&expr, &simplified);
             if !result {
                 match expl.as_ref() {
-                    Some(e) => eprintln!("Failed for explanation {}", e),
-                    None => eprintln!("Failed for unknown reason. Try running with --verbose for an attempted proof"),
+                    Some(e) => eprintln!("ERROR: Failed for explanation {}", e),
+                    None => eprintln!("ERROR: Failed for unknown reason. Try running with --verbose for an attempted proof"),
                 }
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Other,
