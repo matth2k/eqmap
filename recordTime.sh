@@ -9,10 +9,10 @@ set -exo pipefail
 echo "Timing information" > $FILE
 echo "==================" >> $FILE
 echo "debug, no proof" >> $FILE
-/bin/time -f "$FORMAT" --append -o $FILE cargo run $MAIN_ARGS --verbose 2>>/dev/null
+/bin/time -f "$FORMAT" --append -o $FILE cargo run $MAIN_ARGS 2>>/dev/null
 echo "==================" >> $FILE
 echo "debug, proof" >> $FILE
-/bin/time -f "$FORMAT" --append -o $FILE cargo run $MAIN_ARGS 2>>/dev/null
+/bin/time -f "$FORMAT" --append -o $FILE cargo run $MAIN_ARGS --verbose 2>>/dev/null
 echo "==================" >> $FILE
 echo "release, no proof" >> $FILE
 /bin/time -f "$FORMAT" --append -o $FILE cargo run --release $MAIN_ARGS 2>>/dev/null
