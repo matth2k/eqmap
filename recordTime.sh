@@ -1,19 +1,24 @@
 #!/bin/bash
+FORMAT="real %e s\nuser %U s\nsys %S s\nmem %M KB"
+FILE="time.txt"
+TIME_ARGS="-f $FORMAT --append -o $FILE"
+MAIN_ARGS="hard_examples.txt -k 4 -t 60 -s 15000"
 set -exo pipefail
 
 # Collect timing information
-echo "Timing information" > time.txt
-echo "==================" >> time.txt
-echo "debug, no proof" >> time.txt
-/bin/time -p --append -o time.txt cargo run hard_examples.txt -k 4 -t 60 -s 15000 --verbose 2>>/dev/null
-echo "==================" >> time.txt
-echo "debug, proof" >> time.txt
-/bin/time -p --append -o time.txt cargo run hard_examples.txt -k 4 -t 60 -s 15000 2>>/dev/null
-echo "==================" >> time.txt
-echo "release, no proof" >> time.txt
-/bin/time -p --append -o time.txt cargo run --release hard_examples.txt -k 4 -t 60 -s 15000 2>>/dev/null
-echo "release, proof" >> time.txt
-/bin/time -p --append -o time.txt cargo run --release hard_examples.txt -k 4 -t 60 -s 15000 --verbose 2>>/dev/null
-echo "==================" >> time.txt
-cat time.txt
+echo "Timing information" > $FILE
+echo "==================" >> $FILE
+echo "debug, no proof" >> $FILE
+/bin/time -f "$FORMAT" --append -o $FILE cargo run $MAIN_ARGS --verbose 2>>/dev/null
+echo "==================" >> $FILE
+echo "debug, proof" >> $FILE
+/bin/time -f "$FORMAT" --append -o $FILE cargo run $MAIN_ARGS 2>>/dev/null
+echo "==================" >> $FILE
+echo "release, no proof" >> $FILE
+/bin/time -f "$FORMAT" --append -o $FILE cargo run --release $MAIN_ARGS 2>>/dev/null
+echo "==================" >> $FILE
+echo "release, proof" >> $FILE
+/bin/time -f "$FORMAT" --append -o $FILE cargo run --release $MAIN_ARGS --verbose 2>>/dev/null
+echo "==================" >> $FILE
+cat $FILE
 echo "SUCCESS"
