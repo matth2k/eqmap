@@ -178,6 +178,7 @@ fn main() -> std::io::Result<()> {
 
         if args.verbose {
             eprintln!("{}", expl.as_ref().unwrap());
+            eprintln!("============================================================");
         } else {
             eprintln!("{} => ", expr.to_string());
         }
