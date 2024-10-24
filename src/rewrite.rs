@@ -149,7 +149,7 @@ pub fn all_rules_minus_dsd() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules.push(rewrite!("lut3-const"; "(LUT 0 ?a ?b ?c)" => "false"));
     rules.push(rewrite!("lut4-const"; "(LUT 0 ?a ?b ?c ?d)" => "false"));
     rules.push(rewrite!("lut5-const"; "(LUT 0 ?a ?b ?c ?d ?e)" => "false"));
-    rules.push(rewrite!("lut6-const"; "(LUT 0 ?a ?b ?c ?d ?e ?d)" => "false"));
+    rules.push(rewrite!("lut6-const"; "(LUT 0 ?a ?b ?c ?d ?e ?f)" => "false"));
 
     // Evaluate constant inputs (impl as modify-analysis for multi-input cases)
     rules.push(rewrite!("lut1-const-f"; "(LUT 0 ?a)" => "false"));
