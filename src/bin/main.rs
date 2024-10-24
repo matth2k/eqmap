@@ -17,6 +17,9 @@ fn simplify_expr<A>(
     rules: &Vec<Rewrite<lut::LutLang, A>>,
     k: usize,
     gen_proof: bool,
+    timeout: u64,
+    node_limit: usize,
+    iter_limit: usize,
 ) -> (RecExpr<lut::LutLang>, Option<Explanation<lut::LutLang>>)
 where
     A: Analysis<lut::LutLang> + std::default::Default,
@@ -30,7 +33,9 @@ where
         Runner::default().with_explanations_disabled()
     };
     let mut runner = runner
-        .with_time_limit(Duration::from_secs(20))
+        .with_time_limit(Duration::from_secs(timeout))
+        .with_node_limit(node_limit)
+        .with_iter_limit(iter_limit)
         .with_expr(&expr)
         .run(rules);
 
@@ -62,7 +67,9 @@ fn simplify(s: &str) -> String {
     let mut rules = all_rules_minus_dsd();
     rules.append(&mut known_decompositions());
 
-    simplify_expr(&expr, &rules, 4, false).0.to_string()
+    simplify_expr(&expr, &rules, 4, false, 20, 20_000, 30)
+        .0
+        .to_string()
 }
 
 #[test]
@@ -113,7 +120,7 @@ fn test_incorrect_dsd() {
     }
 }
 
-/// Lut-Synth Args
+/// LUT Network Synthesis with E-Graphs
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -125,7 +132,7 @@ struct Args {
     no_verify: bool,
 
     /// Don't use disjoint set decompositions
-    #[arg(short, long, default_value_t = false)]
+    #[arg(short = 'd', long, default_value_t = false)]
     no_dsd: bool,
 
     /// Print explanations (this generates a proof and runs longer)
@@ -135,6 +142,18 @@ struct Args {
     /// Max fan in size for LUTs
     #[arg(short = 'k', long, default_value_t = 4)]
     k: usize,
+
+    /// Timeout in seconds for each expression
+    #[arg(short = 't', long, default_value_t = 25)]
+    timeout: u64,
+
+    /// Maximum number of nodes in graph
+    #[arg(short = 's', long, default_value_t = 30_000)]
+    node_limit: usize,
+
+    /// Maximum number of rewrite iterations
+    #[arg(short = 'n', long, default_value_t = 35)]
+    iter_limit: usize,
 }
 
 fn main() -> std::io::Result<()> {
@@ -175,9 +194,21 @@ fn main() -> std::io::Result<()> {
                 .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
         }
 
-        let (simplified, expl) = simplify_expr(&expr, &rules, args.k, args.verbose);
+        let (simplified, expl) = simplify_expr(
+            &expr,
+            &rules,
+            args.k,
+            args.verbose,
+            args.timeout,
+            args.node_limit,
+            args.iter_limit,
+        );
         let expl: Option<String> = match expl {
-            Some(mut e) => e.get_flat_string().into(),
+            Some(mut e) => {
+                let proof = e.get_flat_string();
+                let linecount = proof.lines().count();
+                format!("{}\n Approx. {} lines in proof tree", proof, linecount).into()
+            }
             None => None,
         };
 
@@ -192,7 +223,7 @@ fn main() -> std::io::Result<()> {
 
         // Verify functionality
         if args.no_verify {
-            eprintln!("Skipping functonality tests...");
+            eprintln!("Skipping functionality tests...");
         } else {
             let result = lut::LutLang::func_equiv_always(&expr, &simplified);
             if !result {
