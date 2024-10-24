@@ -28,6 +28,7 @@ where
     // the given expression and runs the given rules over it
 
     let runner = if gen_proof {
+        eprintln!("WARNING: Proof generation is on (slow)");
         Runner::default().with_explanations_enabled()
     } else {
         Runner::default().with_explanations_disabled()
