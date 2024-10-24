@@ -157,6 +157,11 @@ fn main() -> std::io::Result<()> {
         rules.append(&mut known_decompositions());
     }
 
+    if args.verbose {
+        eprintln!("Running with {} rewrite rules", rules.len());
+        eprintln!("DSD is {}", if args.no_dsd { "OFF" } else { "ON" });
+    }
+
     for line in buf.lines() {
         let line = line.trim();
         if line.starts_with("//") || line.is_empty() {
