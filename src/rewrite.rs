@@ -2,8 +2,14 @@ use super::analysis::LutAnalysis;
 use super::lut;
 use super::lut::to_bitvec;
 use bitvec::{bitvec, order::Lsb0, vec::BitVec};
-use egg::{rewrite, Analysis, Applier, Pattern, Rewrite, Var};
-use std::collections::{HashMap, HashSet};
+use egg::{
+    rewrite, Analysis, Applier, EGraph, ENodeOrVar, Language, Pattern, PatternAst, RecExpr,
+    Rewrite, Subst, Var,
+};
+use std::{
+    collections::{HashMap, HashSet},
+    str::EncodeUtf16,
+};
 
 /// Returns a list of structural mappings of logic functions to LUTs.
 /// For example, MUXes are mapped to 3-LUTs and AND gates to 2-LUTs.
@@ -121,6 +127,7 @@ pub fn known_decompositions() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
 /// Canonicalizes LUTs with redundant inputs
 pub fn redundant_inputs() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
+    rules.push(rewrite!("lut3-redundant-mux"; "(LUT 202 ?s ?a ?a)" => "?a"));
     rules.push(rewrite!("lut2-redundant"; "(LUT ?p ?a ?a)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?a".parse().unwrap()])}));
     rules.push(rewrite!("lut3-redundant"; "(LUT ?p ?a ?b ?b)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?b".parse().unwrap()])}));
     rules.push(rewrite!("lut4-redundant"; "(LUT ?p ?a ?b ?c ?c)" => {CombineAlikeInputs::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?c".parse().unwrap()])}));
@@ -166,6 +173,46 @@ pub fn all_rules_minus_dsd() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
 
     // LUT fuse non-mutually exclusive inputs (hard, opposite of DSD)
     rules
+}
+
+fn zip_vars_with_ids(vars: &[Var], subst: &Subst) -> HashMap<egg::Id, Var> {
+    vars.iter().map(|v| (subst[*v], *v)).collect()
+}
+
+/// Boilerplate code for unioning in custom Appliers while still generating meaningful proofs
+fn union_with_lut_pattern<A>(
+    old_ast: &PatternAst<lut::LutLang>,
+    program: u64,
+    new_lut: &lut::LutLang,
+    vars: &[Var],
+    subst: &egg::Subst,
+    rule_name: egg::Symbol,
+    egraph: &mut egg::EGraph<lut::LutLang, A>,
+) -> Vec<egg::Id>
+where
+    A: Analysis<lut::LutLang> + std::default::Default,
+{
+    match new_lut {
+        lut::LutLang::Lut(l) => {
+            let id_to_var = zip_vars_with_ids(vars, subst);
+            let c = l.clone();
+            let var_list = c[1..]
+                .iter()
+                .map(|id| id_to_var[id].to_string())
+                .collect::<Vec<String>>();
+            let new_ast: PatternAst<lut::LutLang> =
+                format!("(LUT {} {})", program, var_list.join(" "))
+                    .parse()
+                    .unwrap();
+            let (id, b) = egraph.union_instantiations(old_ast, &new_ast, subst, rule_name);
+            if b {
+                vec![id]
+            } else {
+                vec![]
+            }
+        }
+        _ => panic!("Expected LUT in union_with_lut_pattern"),
+    }
 }
 
 /// A rewrite applier for permuting input `pos` with input `pos - 1` from the msb.
@@ -257,7 +304,7 @@ impl Applier<lut::LutLang, LutAnalysis> for CombineAlikeInputs {
         egraph: &mut egg::EGraph<lut::LutLang, LutAnalysis>,
         eclass: egg::Id,
         subst: &egg::Subst,
-        _searcher_ast: Option<&egg::PatternAst<lut::LutLang>>,
+        searcher_ast: Option<&egg::PatternAst<lut::LutLang>>,
         rule_name: egg::Symbol,
     ) -> Vec<egg::Id> {
         let mut operands = self
@@ -274,11 +321,7 @@ impl Applier<lut::LutLang, LutAnalysis> for CombineAlikeInputs {
         let k = operands.len();
         // Handle the mux case as a special case
         if k == 3 && program == 202 {
-            return if egraph.union_trusted(eclass, operands[olen - 1], rule_name) {
-                vec![operands[olen - 1]]
-            } else {
-                vec![]
-            };
+            return vec![];
         }
         let mut new_prog = bitvec!(usize, Lsb0; 0; 1 << (k-1));
         for i in 0..(1 << (k - 2)) {
@@ -292,12 +335,20 @@ impl Applier<lut::LutLang, LutAnalysis> for CombineAlikeInputs {
         let mut c = Vec::from(&[new_prog_id]);
         operands.pop();
         c.append(&mut operands);
-        let new_lut = egraph.add(lut::LutLang::Lut(c.into()));
+        let new_node = lut::LutLang::Lut(c.into());
 
-        if egraph.union_trusted(eclass, new_lut, rule_name) {
-            vec![new_lut]
-        } else {
-            vec![]
+        match searcher_ast {
+            Some(ast) => union_with_lut_pattern(
+                ast, new_prog, &new_node, &self.vars, subst, rule_name, egraph,
+            ),
+            None => {
+                let new_lut = egraph.add(new_node);
+                if egraph.union_trusted(eclass, new_lut, rule_name) {
+                    vec![new_lut]
+                } else {
+                    vec![]
+                }
+            }
         }
     }
 }
@@ -328,7 +379,7 @@ impl Applier<lut::LutLang, LutAnalysis> for ShannonCondense {
         egraph: &mut egg::EGraph<lut::LutLang, LutAnalysis>,
         eclass: egg::Id,
         subst: &egg::Subst,
-        _searcher_ast: Option<&egg::PatternAst<lut::LutLang>>,
+        searcher_ast: Option<&egg::PatternAst<lut::LutLang>>,
         rule_name: egg::Symbol,
     ) -> Vec<egg::Id> {
         let mut operands = self
@@ -355,12 +406,22 @@ impl Applier<lut::LutLang, LutAnalysis> for ShannonCondense {
         let mut c = Vec::from(&[new_prog_id, sel]);
         c.append(&mut operands);
         assert!(c.len() == k + 2);
-        let new_lut = egraph.add(lut::LutLang::Lut(c.into()));
+        let new_node = lut::LutLang::Lut(c.into());
 
-        if egraph.union_trusted(eclass, new_lut, rule_name) {
-            vec![new_lut]
-        } else {
-            vec![]
+        match searcher_ast {
+            Some(ast) => {
+                let mut vars = self.vars.clone();
+                vars.push(self.sel);
+                union_with_lut_pattern(ast, new_prog, &new_node, &vars, subst, rule_name, egraph)
+            }
+            None => {
+                let new_lut = egraph.add(new_node);
+                if egraph.union_trusted(eclass, new_lut, rule_name) {
+                    vec![new_lut]
+                } else {
+                    vec![]
+                }
+            }
         }
     }
 }
@@ -428,7 +489,7 @@ impl Applier<lut::LutLang, LutAnalysis> for FuseCut {
         egraph: &mut egg::EGraph<lut::LutLang, LutAnalysis>,
         eclass: egg::Id,
         subst: &egg::Subst,
-        _searcher_ast: Option<&egg::PatternAst<lut::LutLang>>,
+        searcher_ast: Option<&egg::PatternAst<lut::LutLang>>,
         rule_name: egg::Symbol,
     ) -> Vec<egg::Id> {
         let root_operands = self
@@ -480,12 +541,28 @@ impl Applier<lut::LutLang, LutAnalysis> for FuseCut {
             c[v + 1] = k;
         }
 
-        let new_lut = egraph.add(lut::LutLang::Lut(c.into()));
+        let new_node = lut::LutLang::Lut(c.clone().into());
 
-        if egraph.union_trusted(eclass, new_lut, rule_name) {
-            vec![new_lut]
-        } else {
-            vec![]
+        match searcher_ast {
+            Some(ast) => {
+                let all_vars: Vec<Var> = self
+                    .root
+                    .iter()
+                    .cloned()
+                    .chain(self.rhs.iter().cloned())
+                    .collect();
+                union_with_lut_pattern(
+                    ast, new_prog, &new_node, &all_vars, subst, rule_name, egraph,
+                )
+            }
+            None => {
+                let new_lut = egraph.add(new_node);
+                if egraph.union_trusted(eclass, new_lut, rule_name) {
+                    vec![new_lut]
+                } else {
+                    vec![]
+                }
+            }
         }
     }
 }

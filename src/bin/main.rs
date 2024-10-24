@@ -8,6 +8,7 @@ use lut_synth::{
 use std::{
     io::{IsTerminal, Read},
     path::PathBuf,
+    time::Duration,
 };
 
 /// simplify `expr` using egg with at most `k` fan-in on LUTs
@@ -15,14 +16,21 @@ fn simplify_expr<A>(
     expr: &RecExpr<lut::LutLang>,
     rules: &Vec<Rewrite<lut::LutLang, A>>,
     k: usize,
-) -> (RecExpr<lut::LutLang>, Explanation<lut::LutLang>)
+    gen_proof: bool,
+) -> (RecExpr<lut::LutLang>, Option<Explanation<lut::LutLang>>)
 where
     A: Analysis<lut::LutLang> + std::default::Default,
 {
     // simplify the expression using a Runner, which creates an e-graph with
     // the given expression and runs the given rules over it
-    let mut runner = Runner::default()
-        .with_explanations_enabled()
+
+    let mut runner = if gen_proof {
+        Runner::default().with_explanations_enabled()
+    } else {
+        Runner::default().with_explanations_disabled()
+    };
+    let mut runner = runner
+        .with_time_limit(Duration::from_secs(20))
         .with_expr(&expr)
         .run(rules);
 
@@ -32,10 +40,17 @@ where
     // use an Extractor to pick the best element of the root eclass
     let extractor = Extractor::new(&runner.egraph, KLUTCostFn::new(k));
     let (_best_cost, best) = extractor.find_best(root);
-    let expl = runner.explain_equivalence(&expr, &best);
+    let expl = if gen_proof {
+        runner.explain_equivalence(&expr, &best).into()
+    } else {
+        None
+    };
     eprintln!(
-        "Saturated to {} nodes",
-        runner.egraph.total_number_of_nodes()
+        "Grown to {} nodes with reason {:?}",
+        runner.egraph.total_number_of_nodes(),
+        runner
+            .stop_reason
+            .unwrap_or(egg::StopReason::Other("Unknown".to_string()))
     );
     (best, expl)
 }
@@ -47,7 +62,7 @@ fn simplify(s: &str) -> String {
     let mut rules = all_rules_minus_dsd();
     rules.append(&mut known_decompositions());
 
-    simplify_expr(&expr, &rules, 4).0.to_string()
+    simplify_expr(&expr, &rules, 4, false).0.to_string()
 }
 
 #[test]
@@ -113,7 +128,7 @@ struct Args {
     #[arg(short, long, default_value_t = false)]
     no_dsd: bool,
 
-    /// Print explanations
+    /// Print explanations (this generates a proof and runs longer)
     #[arg(short = 'v', long, default_value_t = false)]
     verbose: bool,
 
@@ -155,10 +170,14 @@ fn main() -> std::io::Result<()> {
                 .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
         }
 
-        let (simplified, expl) = simplify_expr(&expr, &rules, args.k);
+        let (simplified, expl) = simplify_expr(&expr, &rules, args.k, args.verbose);
+        let expl: Option<String> = match expl {
+            Some(mut e) => e.get_flat_string().into(),
+            None => None,
+        };
 
         if args.verbose {
-            eprintln!("{}", expl.to_string());
+            eprintln!("{}", expl.as_ref().unwrap());
         } else {
             eprintln!("{} => ", expr.to_string());
         }
@@ -171,7 +190,10 @@ fn main() -> std::io::Result<()> {
         } else {
             let result = lut::LutLang::func_equiv_always(&expr, &simplified);
             if !result {
-                eprintln!("Failed for explanation {:?}", expl.to_string());
+                match expl.as_ref() {
+                    Some(e) => eprintln!("Failed for explanation {}", e),
+                    None => eprintln!("Failed for unknown reason. Try running with --verbose for an attempted proof"),
+                }
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Functionality verification failed",
