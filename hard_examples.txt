@@ -15,3 +15,7 @@
 // We can create the circuit by hand too
 (NOT (NOR (AND s0 a) (AND (NOT s0) b)))
 // CHECK: (LUT 202 s0 a b)
+
+// Also a 4:1 mux using AIG
+(NOT (NOR (AND s1 (NOT (NOR (AND s0 a) (AND (NOT s0) b)))) (AND (NOT s1) (NOT (NOR (AND s0 c) (AND (NOT s0) d))))))
+// CHECK: (LUT 51952 s1 (LUT 61642 s1 s0 c d) a b)
