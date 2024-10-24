@@ -168,7 +168,7 @@ fn main() -> std::io::Result<()> {
     let mut buf = String::new();
 
     if cfg!(debug_assertions) {
-        eprintln!("WARNING: Running with debug assertions enabled");
+        eprintln!("WARNING: Debug assertions are enabled");
     }
 
     if args.input.is_some() {
@@ -204,6 +204,10 @@ fn main() -> std::io::Result<()> {
         if !args.no_verify {
             lut::verify_expr(&expr)
                 .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+        }
+
+        if cfg!(debug_assertions) {
+            eprintln!("WARNING: Running with debug assertions is slow");
         }
 
         let (simplified, expl) = simplify_expr(
