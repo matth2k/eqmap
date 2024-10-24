@@ -238,7 +238,7 @@ impl Applier<lut::LutLang, LutAnalysis> for PermuteInput {
         egraph: &mut egg::EGraph<lut::LutLang, LutAnalysis>,
         eclass: egg::Id,
         subst: &egg::Subst,
-        _searcher_ast: Option<&egg::PatternAst<lut::LutLang>>,
+        searcher_ast: Option<&egg::PatternAst<lut::LutLang>>,
         rule_name: egg::Symbol,
     ) -> Vec<egg::Id> {
         let operands = self
@@ -271,12 +271,26 @@ impl Applier<lut::LutLang, LutAnalysis> for PermuteInput {
         let mut c = Vec::from(&[new_program_id]);
         c.append(&mut swaperands);
 
-        let new_lut = egraph.add(lut::LutLang::Lut(c.into()));
+        let new_node = lut::LutLang::Lut(c.into());
 
-        if egraph.union_trusted(eclass, new_lut, rule_name) {
-            vec![new_lut]
-        } else {
-            vec![]
+        match searcher_ast {
+            Some(ast) => union_with_lut_pattern(
+                ast,
+                new_program,
+                &new_node,
+                &self.vars,
+                subst,
+                rule_name,
+                egraph,
+            ),
+            None => {
+                let new_lut = egraph.add(new_node);
+                if egraph.union_trusted(eclass, new_lut, rule_name) {
+                    vec![new_lut]
+                } else {
+                    vec![]
+                }
+            }
         }
     }
 }
