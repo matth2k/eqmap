@@ -33,7 +33,14 @@ where
     } else {
         Runner::default().with_explanations_disabled()
     };
+
+    // Use back-off scheduling on runner to avoid transpositions taking too much time
+    let bos = BackoffScheduler::default()
+        .with_ban_length(2)
+        .with_initial_match_limit(800 * 4);
+
     let mut runner = runner
+        .with_scheduler(bos)
         .with_time_limit(Duration::from_secs(timeout))
         .with_node_limit(node_limit)
         .with_iter_limit(iter_limit)
@@ -150,7 +157,7 @@ struct Args {
 
     /// Timeout in seconds for each expression
     #[arg(short = 't', long,
-        default_value_t = 
+        default_value_t =
         if cfg!(debug_assertions) {
             45
         } else {
@@ -181,8 +188,12 @@ fn main() -> std::io::Result<()> {
     } else {
         let mut stdin = std::io::stdin();
         if stdin.is_terminal() {
-            print!("> "); std::io::stdout().flush()?;
-            while stdin.read_line(&mut buf)? <= 2 {print!("> "); std::io::stdout().flush()?;}
+            print!("> ");
+            std::io::stdout().flush()?;
+            while stdin.read_line(&mut buf)? <= 2 {
+                print!("> ");
+                std::io::stdout().flush()?;
+            }
         } else {
             stdin.read_to_string(&mut buf)?;
         }
@@ -195,7 +206,10 @@ fn main() -> std::io::Result<()> {
 
     if args.verbose {
         eprintln!("INFO: Running with {} rewrite rules", rules.len());
-        eprintln!("INFO: DSD rewrites {}", if args.no_dsd { "OFF" } else { "ON" });
+        eprintln!(
+            "INFO: DSD rewrites {}",
+            if args.no_dsd { "OFF" } else { "ON" }
+        );
     }
 
     for line in buf.lines() {

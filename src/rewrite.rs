@@ -5,8 +5,6 @@ use bitvec::{bitvec, order::Lsb0, vec::BitVec};
 use egg::{rewrite, Analysis, Applier, Pattern, PatternAst, Rewrite, Subst, Var};
 use std::collections::{HashMap, HashSet};
 
-const PIGEON: usize = 1 + 1 + 2 + 6 + 24 + 120 + 720 + 4;
-
 /// Returns a list of structural mappings of logic functions to LUTs.
 /// For example, MUXes are mapped to 3-LUTs and AND gates to 2-LUTs.
 pub fn struct_lut_map<A>() -> Vec<Rewrite<lut::LutLang, A>>
@@ -251,13 +249,6 @@ impl Applier<lut::LutLang, LutAnalysis> for PermuteInput {
         assert!(self.pos > 0);
 
         if operands[self.pos] == operands[self.pos - 1] {
-            return vec![];
-        }
-
-        // Depending on the assumptions we make about the cuts of this node
-        // Combinatorially, it's impossible to have a class larger than this magic constant
-        // TODO: codify these assumptions
-        if egraph[eclass].nodes.len() > PIGEON {
             return vec![];
         }
 
