@@ -21,6 +21,7 @@ define_language! {
         "NOR" = Nor([Id; 2]),
         "MUX" = Mux([Id; 3]), // s, a, b
         "AND" = And([Id; 2]),
+        "XOR" = Xor([Id; 2]),
         "NOT" = Not([Id; 1]),
         "LUT" = Lut(Box<[Id]>), // Program is first
     }
@@ -41,7 +42,7 @@ impl LutLang {
                 }
             }
             LutLang::Var(f) => match f.as_str() {
-                "NOR" | "LUT" | "MUX" | "AND" | "NOT" => {
+                "NOR" | "LUT" | "MUX" | "AND" | "XOR" | "NOT" => {
                     return Err(
                         "Variable name is already reserved. Check for missing parentheses."
                             .to_string(),
@@ -149,6 +150,11 @@ impl LutLang {
                 let a0 = &a[0];
                 let a1 = &a[1];
                 expr[*a0].eval(inputs, expr) && expr[*a1].eval(inputs, expr)
+            }
+            LutLang::Xor(a) => {
+                let a0 = &a[0];
+                let a1 = &a[1];
+                expr[*a0].eval(inputs, expr) ^ expr[*a1].eval(inputs, expr)
             }
             LutLang::Not(a) => {
                 let a0 = &a[0];

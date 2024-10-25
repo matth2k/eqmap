@@ -2,14 +2,10 @@ use super::analysis::LutAnalysis;
 use super::lut;
 use super::lut::to_bitvec;
 use bitvec::{bitvec, order::Lsb0, vec::BitVec};
-use egg::{
-    rewrite, Analysis, Applier, EGraph, ENodeOrVar, Language, Pattern, PatternAst, RecExpr,
-    Rewrite, Subst, Var,
-};
-use std::{
-    collections::{HashMap, HashSet},
-    str::EncodeUtf16,
-};
+use egg::{rewrite, Analysis, Applier, Pattern, PatternAst, Rewrite, Subst, Var};
+use std::collections::{HashMap, HashSet};
+
+const PIGEON: usize = 1 + 1 + 2 + 6 + 24 + 120 + 720 + 4;
 
 /// Returns a list of structural mappings of logic functions to LUTs.
 /// For example, MUXes are mapped to 3-LUTs and AND gates to 2-LUTs.
@@ -21,6 +17,7 @@ where
     // Logic element conversions
     rules.push(rewrite!("nor2-conversion"; "(NOR ?a ?b)" => "(LUT 1 ?a ?b)"));
     rules.push(rewrite!("and2-conversion"; "(AND ?a ?b)" => "(LUT 8 ?a ?b)"));
+    rules.push(rewrite!("xor2-conversion"; "(XOR ?a ?b)" => "(LUT 6 ?a ?b)"));
     rules.push(rewrite!("inverter-conversion"; "(NOT ?a)" => "(LUT 1 ?a)"));
     // s? a : b
     rules.push(rewrite!("mux2-1-conversion"; "(MUX ?s ?a ?b)" => "(LUT 202 ?s ?a ?b)"));
@@ -254,6 +251,13 @@ impl Applier<lut::LutLang, LutAnalysis> for PermuteInput {
         assert!(self.pos > 0);
 
         if operands[self.pos] == operands[self.pos - 1] {
+            return vec![];
+        }
+
+        // Depending on the assumptions we make about the cuts of this node
+        // Combinatorially, it's impossible to have a class larger than this magic constant
+        // TODO: codify these assumptions
+        if egraph[eclass].nodes.len() > PIGEON {
             return vec![];
         }
 

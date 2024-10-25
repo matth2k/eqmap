@@ -42,6 +42,10 @@ where
 
     // the Runner knows which e-class the expression given with `with_expr` is in
     let root = runner.roots[0];
+    if gen_proof {
+        let report = runner.report();
+        eprintln!("INFO: {}", report.to_string().replace("\n", "\nINFO: "));
+    }
 
     // use an Extractor to pick the best element of the root eclass
     let extractor = Extractor::new(&runner.egraph, KLUTCostFn::new(k));
