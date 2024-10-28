@@ -13,8 +13,9 @@ use egg::Language;
 use egg::RecExpr;
 use egg::Symbol;
 
-/// Definitions of e-node types. [Program] is the only node type that is not a net/signal.
 define_language! {
+    /// Definitions of e-node types. [Program] is the only node type that is not a net/signal.
+    #[allow(missing_docs)]
     pub enum LutLang {
         Const(bool),
         Program(u64), // The only node type that is not a net

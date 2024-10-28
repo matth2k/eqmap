@@ -1,3 +1,5 @@
+![](https://github.com/matth2k/lut-synth/actions/workflows/rust.yml/badge.svg)
+
 # lut-synth: LUT Network Synthesis with E-Graphs
 
 ## Description
