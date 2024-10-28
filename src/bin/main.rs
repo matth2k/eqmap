@@ -9,7 +9,7 @@ use lut_synth::{
 use std::{
     io::{IsTerminal, Read, Write},
     path::PathBuf,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 fn report_progress<A>(
@@ -93,8 +93,16 @@ where
     }
 
     // use an Extractor to pick the best element of the root eclass
+    let extraction_start = Instant::now();
     let extractor = Extractor::new(&runner.egraph, KLUTCostFn::new(k));
     let (_best_cost, best) = extractor.find_best(root);
+    let extraction_time = extraction_start.elapsed();
+    if gen_proof {
+        eprintln!(
+            "INFO: Extraction time: {} seconds",
+            extraction_time.as_secs_f64()
+        );
+    }
     let expl = if gen_proof {
         runner.explain_equivalence(&expr, &best).into()
     } else {
