@@ -1,3 +1,13 @@
+/*!
+
+  The rewrite module defines the collection of rewrite rules for LUT networks.
+  These rules roughly fall into 5 categories:
+  Shannon decomposition, general cut-fusion, general cut-decomposition (using DSD), LUT symmetry, constant evaluation, and gate conversion.
+  Gate conversion is only present for the sake of running without structural synthesis.
+
+  This module also contains all the appliers for LUT rewrite rules. This code is the most delicate and requires the most testing.
+
+*/
 use super::analysis::LutAnalysis;
 use super::lut;
 use super::lut::to_bitvec;
@@ -222,6 +232,7 @@ pub struct PermuteInput {
 }
 
 impl PermuteInput {
+    /// Create a new [PermuteInput] applier given a transposition at `pos` in `operands`
     pub fn new(pos: usize, program: Var, vars: Vec<Var>) -> Self {
         Self { pos, program, vars }
     }
@@ -302,6 +313,8 @@ pub struct CombineAlikeInputs {
 }
 
 impl CombineAlikeInputs {
+    /// Create an applier that combines duplicated inputs to a LUT.
+    /// The last two elements in `vars` must be the same.
     pub fn new(program: Var, vars: Vec<Var>) -> Self {
         Self { program, vars }
     }
@@ -377,6 +390,8 @@ pub struct ShannonCondense {
 }
 
 impl ShannonCondense {
+    /// Create a new applier for condensing Shannon expansions. This is a special case of [FuseCut].
+    /// The matched node should take the form `(LUT 202 ?s (LUT ?p ?a ?b ... ) (LUT ?q ?a ?b ...))`
     pub fn new(sel: Var, p: Var, q: Var, vars: Vec<Var>) -> Self {
         Self { sel, p, q, vars }
     }
@@ -451,6 +466,9 @@ pub struct FuseCut {
 }
 
 impl FuseCut {
+    /// Create a new applier for fusing two cut of logic elements into a single LUT.
+    /// The union of `root` and `rhs` must be no larger than 6 total nodes.
+    /// The matched node should take the form `(LUT ?root_p ?root ... (LUT ?rhs_p ?rhs ...))`
     pub fn new(root_p: Var, root: Vec<Var>, rhs_p: Var, rhs: Vec<Var>) -> Self {
         Self {
             root_p,

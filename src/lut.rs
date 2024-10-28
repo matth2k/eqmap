@@ -1,3 +1,8 @@
+/*!
+
+  The lut module defines the grammar used to represent LUTs, gates, and principal inputs.
+
+*/
 use std::collections::HashMap;
 
 use super::analysis::LutAnalysis;
@@ -7,9 +12,6 @@ use egg::Id;
 use egg::Language;
 use egg::RecExpr;
 use egg::Symbol;
-
-const OR_TABLE: u64 = 0xFFFFFFFFFFFFFFFE;
-const NOR_TABLE: u64 = 0x1;
 
 /// Definitions of e-node types. [Program] is the only node type that is not a net/signal.
 define_language! {
@@ -124,7 +126,7 @@ impl LutLang {
     }
 
     /// Returns the fan-in of a [LutLang::Lut]
-    fn get_lut_size(&self) -> Result<usize, String> {
+    pub fn get_lut_size(&self) -> Result<usize, String> {
         match self {
             LutLang::Lut(l) => {
                 self.verify()?;
@@ -184,6 +186,7 @@ impl LutLang {
         }
     }
 
+    /// This funcion returns true if two expressions evaluate to the same value under the certain `inputs`
     pub fn func_equiv(
         expr: &RecExpr<Self>,
         other: &RecExpr<Self>,
@@ -212,13 +215,15 @@ impl LutLang {
         inputs
     }
 
-    pub fn get_input_set(&self, expr: &RecExpr<Self>) -> Vec<String> {
+    fn get_input_set(&self, expr: &RecExpr<Self>) -> Vec<String> {
         let mut inputs = self.get_inputs_rec(expr);
         inputs.sort();
         inputs.dedup();
         inputs
     }
 
+    /// Given two expressions and a set of input values,
+    /// this funcion returns true if they represent the same boolean function
     pub fn func_equiv_always(expr: &RecExpr<Self>, other: &RecExpr<Self>) -> bool {
         let root = &expr[(expr.as_ref().len() - 1).into()];
         let inputs = root.get_input_set(&expr);

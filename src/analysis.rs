@@ -1,3 +1,13 @@
+/*!
+
+  This module defines the analysis stored with signals in the LUT network.
+  In most respects, the analysis enforces some level of consistency when rewrite rules are applied.
+  For example, we should not be merging programs with non-programs.
+  This analysis can also assist in constant propagation and pruning nodes.
+  There is more work to be done in [LutAnalysis::modify] to handle pruning.
+
+*/
+
 use super::lut;
 use egg::{Analysis, DidMerge};
 
@@ -15,6 +25,7 @@ pub struct LutAnalysisData {
 }
 
 impl LutAnalysisData {
+    /// Create a new LutAnalysisData struct
     pub fn new(program: Option<u64>, const_val: Option<bool>, input: Option<String>) -> Self {
         Self {
             program,
@@ -23,6 +34,7 @@ impl LutAnalysisData {
         }
     }
 
+    /// The default value for gates/LUTs
     pub fn default() -> Self {
         Self {
             program: None,
@@ -72,7 +84,7 @@ impl Analysis<lut::LutLang> for LutAnalysis {
         *to = merged;
         DidMerge(merged_to, *to != from)
     }
-    fn make(egraph: &egg::EGraph<lut::LutLang, Self>, enode: &lut::LutLang) -> Self::Data {
+    fn make(_egraph: &egg::EGraph<lut::LutLang, Self>, enode: &lut::LutLang) -> Self::Data {
         match enode {
             lut::LutLang::Lut(_l) => LutAnalysisData::new(None, None, None),
             lut::LutLang::Program(p) => LutAnalysisData::new(Some(*p), None, None),

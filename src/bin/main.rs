@@ -118,6 +118,7 @@ where
     (best, expl)
 }
 
+#[allow(dead_code)]
 /// parse an expression, simplify it with DSD and at most 4 fan-in, and pretty print it back out
 fn simplify(s: &str) -> String {
     // parse the expression, the type annotation tells it which Language to use

@@ -1,6 +1,10 @@
-use egg::{CostFunction, Id, Language};
+/*!
 
+  The code module contains a super simple cost function that extracts LUTs with at most `k` fan-in.
+
+*/
 use super::lut::LutLang;
+use egg::{CostFunction, Id, Language};
 
 /// A cost function that extracts LUTs with at most `k` fan-in.
 pub struct KLUTCostFn {
