@@ -10,3 +10,4 @@ edition = "2021"
 bitvec = "1.0.1"
 clap = { version = "4.5.20", features = ["derive"] }
 egg = "0.9.5"
+indicatif = "0.17.8"

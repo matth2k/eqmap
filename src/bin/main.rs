@@ -1,5 +1,6 @@
 use clap::Parser;
 use egg::*;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use lut_synth::{
     cost::KLUTCostFn,
     lut,
@@ -11,12 +12,27 @@ use std::{
     time::Duration,
 };
 
+fn report_progress<A>(
+    runner: &Runner<lut::LutLang, A>,
+    iter_bar: &mut ProgressBar,
+    node_bar: &mut ProgressBar,
+) -> Result<(), String>
+where
+    A: Analysis<lut::LutLang> + std::default::Default,
+{
+    iter_bar.inc(1);
+    let nodes = runner.egraph.total_number_of_nodes();
+    node_bar.set_position(nodes as u64);
+    Ok(())
+}
+
 /// simplify `expr` using egg with at most `k` fan-in on LUTs
 fn simplify_expr<A>(
     expr: &RecExpr<lut::LutLang>,
     rules: &Vec<Rewrite<lut::LutLang, A>>,
     k: usize,
     gen_proof: bool,
+    prog_bar: bool,
     timeout: u64,
     node_limit: usize,
     iter_limit: usize,
@@ -34,18 +50,40 @@ where
         Runner::default().with_explanations_disabled()
     };
 
+    // Print a progress bar to get a sense of growth
+    let mp = MultiProgress::new();
+
     // Use back-off scheduling on runner to avoid transpositions taking too much time
     let bos = BackoffScheduler::default()
         .with_ban_length(2)
-        .with_initial_match_limit(800 * 4);
+        .with_initial_match_limit(960);
 
-    let mut runner = runner
+    let runner = runner
         .with_scheduler(bos)
         .with_time_limit(Duration::from_secs(timeout))
         .with_node_limit(node_limit)
-        .with_iter_limit(iter_limit)
-        .with_expr(&expr)
-        .run(rules);
+        .with_iter_limit(iter_limit);
+
+    let runner = if prog_bar {
+        let (mut iter_bar, mut node_bar) = (
+            mp.add(ProgressBar::new(iter_limit as u64).with_message("iterations")),
+            mp.add(ProgressBar::new(node_limit as u64)),
+        );
+        iter_bar.set_style(
+            ProgressStyle::with_template("[{bar:60.cyan/blue}] {pos}/{len} iterations").unwrap(),
+        );
+        node_bar.set_style(
+            ProgressStyle::with_template("[{bar:60.magenta}] {pos}/{len} nodes").unwrap(),
+        );
+        runner.with_hook(move |r| report_progress(r, &mut iter_bar, &mut node_bar))
+    } else {
+        runner
+    };
+
+    let mut runner = runner.with_expr(&expr).run(rules);
+
+    // Clear the progress bar
+    mp.clear().unwrap();
 
     // the Runner knows which e-class the expression given with `with_expr` is in
     let root = runner.roots[0];
@@ -79,7 +117,7 @@ fn simplify(s: &str) -> String {
     let mut rules = all_rules_minus_dsd();
     rules.append(&mut known_decompositions());
 
-    simplify_expr(&expr, &rules, 4, false, 20, 20_000, 30)
+    simplify_expr(&expr, &rules, 4, false, false, 20, 20_000, 30)
         .0
         .to_string()
 }
@@ -159,19 +197,19 @@ struct Args {
     #[arg(short = 't', long,
         default_value_t =
         if cfg!(debug_assertions) {
-            45
+            24
         } else {
-            15
+            8
         })
     ]
     timeout: u64,
 
     /// Maximum number of nodes in graph
-    #[arg(short = 's', long, default_value_t = 20_000)]
+    #[arg(short = 's', long, default_value_t = 18_000)]
     node_limit: usize,
 
     /// Maximum number of rewrite iterations
-    #[arg(short = 'n', long, default_value_t = 30)]
+    #[arg(short = 'n', long, default_value_t = 20)]
     iter_limit: usize,
 }
 
@@ -234,6 +272,7 @@ fn main() -> std::io::Result<()> {
             &rules,
             args.k,
             args.verbose,
+            true, // let's always use a progress bar for now
             args.timeout,
             args.node_limit,
             args.iter_limit,
