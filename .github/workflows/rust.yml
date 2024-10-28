@@ -10,17 +10,56 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
 
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo test --all-features
+
+  # Check formatting with rustfmt
+  formatting:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Ensure rustfmt is installed and setup problem matcher
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+      - name: Rustfmt Check
+        uses: actions-rust-lang/rustfmt@v1
+
+  build:
+    name: Build and Test
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build (debug)
-      run: cargo build --verbose
-    - name: Run tests (debug)
-      run: cargo test --verbose
-    - name: Build (release)
-      run: cargo build --release --verbose
-    - name: Run tests (release)
-      run: cargo test --release --verbose
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build (debug)
+        run: cargo build --verbose
+      - name: Build (release)
+        run: cargo build --release --verbose
+      - name: Run cargo tests (release)
+        run: cargo test --release --verbose
+      - name: Run integration tests (debug)
+        run: cargo run tests/examples.txt > examples_debug.out && diff examples_debug.out tests/examples.out
+      - name: Run integration tests (debug, verbose)
+        run: cargo run tests/examples.txt --verbose > examples_debug_verbose.out && diff examples_debug_verbose.out tests/examples.out
+
+  speed:
+    name: Test Speed
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build (release)
+        run: cargo build --release --verbose
+      - name: Run integration tests (release, )
+        run: time cargo run --release -- tests/examples.txt
+      - name: Run integration tests (release, proof gen)
+        run: time cargo run --release -- tests/examples.txt --verbose
