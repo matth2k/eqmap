@@ -4,7 +4,7 @@
 
 */
 use super::lut::LutLang;
-use egg::{CostFunction, Id, Language};
+use egg::{CostFunction, Id, Language, RecExpr};
 
 /// A cost function that extracts LUTs with at most `k` fan-in.
 pub struct KLUTCostFn {
@@ -14,8 +14,8 @@ pub struct KLUTCostFn {
 impl KLUTCostFn {
     /// Returns a new cost function with the given `k` value.
     pub fn new(k: usize) -> Self {
-        if k < 1 || k > 6 {
-            panic!("k must be between 1 and 6");
+        if k < 1 || k > LutLang::MAX_LUT_SIZE {
+            panic!("k must be between 1 and {}", LutLang::MAX_LUT_SIZE);
         }
         Self { k }
     }

@@ -31,6 +31,9 @@ define_language! {
 }
 
 impl LutLang {
+    /// Maximum size allowed for a LUT.
+    pub const MAX_LUT_SIZE: usize = 6;
+
     /// Verify the grammar of a single [LutLang] node
     fn verify(&self) -> Result<(), String> {
         match self {
@@ -38,8 +41,8 @@ impl LutLang {
                 let l = list.len();
                 if l == 0 {
                     return Err("LUT must have at least one element".to_string());
-                } else if l - 1 > 6 {
-                    return Err("Only 6-Luts or smaller supported".to_string());
+                } else if l - 1 > Self::MAX_LUT_SIZE {
+                    return Err(format!("Only {}-Luts or smaller supported", Self::MAX_LUT_SIZE));
                 } else {
                     Ok(())
                 }
@@ -67,7 +70,7 @@ impl LutLang {
                 LutLang::Lut(l) => {
                     if let LutLang::Program(p) = expr[l[0]] {
                         let k = l.len() - 1;
-                        if k < 6 && p >= (1 << (1 << k)) {
+                        if k < Self::MAX_LUT_SIZE && p >= (1 << (1 << k)) {
                             return Err("Program too large for LUT".to_string());
                         }
                     } else {
