@@ -16,6 +16,7 @@ An early experiment on representing LUT networks within E-Graphs for logic synth
   * [Rust Analyzer Extension](https://rust-analyzer.github.io/)
   * [VerilogHDL Extension](https://marketplace.visualstudio.com/items?itemName=mshr-h.VerilogHDL)
 * [Verible](https://github.com/chipsalliance/verible)
+* [Yosys](https://github.com/YosysHQ/yosys)
 
 ### Installing
 `cargo build`
@@ -30,7 +31,7 @@ Here is a rough outline of the type system defined by `LutLang`:
 
 `<LutLang> ::= <Program> | <Node>`
 
-`<Node> ::= <Const> | x | <Input> | NOR <Node> <Node> | MUX <Node> <Node> <Node> | LUT <Program> Node ... Node`
+`<Node> ::= <Const> | x | <Input> | NOR <Node> <Node> | MUX <Node> <Node> <Node> | LUT <Program> <Node> ... <Node>`
 
 `<Const> ::= false | true // Base type is a bool`
 
