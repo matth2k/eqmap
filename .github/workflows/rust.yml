@@ -67,3 +67,14 @@ jobs:
         run: time cargo run --release -- tests/gate_compare.txt --verbose
       - name: Run comparator (release,)
         run: time cargo run --release -- tests/gate_compare.txt
+
+
+  mdformat:
+    name: Markdown format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Markdown check format
+        uses: ydah/mdformat-action@main
+        with:
+          number: true

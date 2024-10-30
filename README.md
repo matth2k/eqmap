@@ -3,22 +3,25 @@
 # lut-synth: LUT Network Synthesis with E-Graphs
 
 ## Description
+
 An early experiment on representing LUT networks within E-Graphs for logic synthesis
 
 ### Dependencies
-* [rustup](https://rustup.rs/)
-  * Crates
-    * [egg](https://docs.rs/egg/latest/egg/)
-    * [bitvec](https://docs.rs/bitvec/latest/bitvec/)
-    * [clap](https://docs.rs/clap/latest/clap/)
-    * [indicatif](https://docs.rs/indicatif/latest/indicatif/)
-* VSCode
-  * [Rust Analyzer Extension](https://rust-analyzer.github.io/)
-  * [VerilogHDL Extension](https://marketplace.visualstudio.com/items?itemName=mshr-h.VerilogHDL)
-* [Verible](https://github.com/chipsalliance/verible)
-* [Yosys](https://github.com/YosysHQ/yosys)
+
+- [rustup](https://rustup.rs/)
+  - Crates
+    - [egg](https://docs.rs/egg/latest/egg/)
+    - [bitvec](https://docs.rs/bitvec/latest/bitvec/)
+    - [clap](https://docs.rs/clap/latest/clap/)
+    - [indicatif](https://docs.rs/indicatif/latest/indicatif/)
+- VSCode
+  - [Rust Analyzer Extension](https://rust-analyzer.github.io/)
+  - [VerilogHDL Extension](https://marketplace.visualstudio.com/items?itemName=mshr-h.VerilogHDL)
+- [Verible](https://github.com/chipsalliance/verible)
+- [Yosys](https://github.com/YosysHQ/yosys)
 
 ### Installing
+
 `cargo build`
 
 `cargo run < examples.txt # Run the synthesizer on a few examples`
