@@ -270,9 +270,7 @@ impl Applier<lut::LutLang, LutAnalysis> for PermuteInput {
         assert!(self.pos < operands.len());
 
         let mut swaperands = operands.clone();
-        let tmp = swaperands[self.pos];
-        swaperands[self.pos] = swaperands[self.pos - 1];
-        swaperands[self.pos - 1] = tmp;
+        swaperands.swap(self.pos, self.pos - 1);
 
         let mut c = Vec::from(&[new_program_id]);
         c.append(&mut swaperands);
