@@ -303,19 +303,22 @@ pub fn eval_lut_const_input(p: &u64, msb: usize, v: bool) -> u64 {
 /// Together these generate the permutation group.
 pub fn swap_pos(bv: &u64, k: usize, pos: usize) -> u64 {
     assert!(pos < k - 1);
-    let mut list: Vec<BitVec> = Vec::new();
+    let mut table: Vec<BitVec> = Vec::new();
     for i in 0..(1 << k) {
-        list.push(to_bitvec(i, k));
+        table.push(to_bitvec(i, k));
     }
-    for table in list.iter_mut().take(1 << k) {
-        let tmp = table[pos];
-        let tmp2 = table[pos + 1];
-        table.set(pos, tmp2);
-        table.set(pos + 1, tmp);
+
+    // Swap the bit at `pos` in the truth table entries. Then use those entries to index the new
+    // LUT program.
+    for entry in table.iter_mut().take(1 << k) {
+        let tmp = entry[pos];
+        let tmp2 = entry[pos + 1];
+        entry.set(pos, tmp2);
+        entry.set(pos + 1, tmp);
     }
     let mut nbv: BitVec = bitvec!(usize, Lsb0; 0; 1 << k);
-    for (i, table) in list.iter().enumerate().take(1 << k) {
-        let index = from_bitvec(table) as usize;
+    for (i, entry) in table.iter().enumerate().take(1 << k) {
+        let index = from_bitvec(entry) as usize;
         nbv.set(index, eval_lut_bv(*bv, &to_bitvec(i as u64, k)));
     }
     from_bitvec(&nbv)
