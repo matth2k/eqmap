@@ -4,7 +4,7 @@
 
 */
 use super::lut::LutLang;
-use egg::{CostFunction, Id, Language, RecExpr};
+use egg::{CostFunction, Id, Language};
 
 /// A cost function that extracts LUTs with at most `k` fan-in.
 pub struct KLUTCostFn {
