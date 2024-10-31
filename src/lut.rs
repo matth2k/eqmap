@@ -43,7 +43,7 @@ impl LutLang {
             LutLang::Lut(list) => {
                 let l = list.len();
                 if l == 0 {
-                    return Err("LUT must have at least one element".to_string());
+                    Err("LUT must have at least one element".to_string())
                 } else if l - 1 > Self::MAX_LUT_SIZE {
                     return Err(format!(
                         "Only {}-Luts or smaller supported",
@@ -54,12 +54,9 @@ impl LutLang {
                 }
             }
             LutLang::Var(f) => match f.as_str() {
-                "NOR" | "LUT" | "MUX" | "AND" | "XOR" | "NOT" => {
-                    return Err(
-                        "Variable name is already reserved. Check for missing parentheses."
-                            .to_string(),
-                    );
-                }
+                "NOR" | "LUT" | "MUX" | "AND" | "XOR" | "NOT" => Err(
+                    "Variable name is already reserved. Check for missing parentheses.".to_string(),
+                ),
                 _ => Ok(()),
             },
             _ => Ok(()),
@@ -72,18 +69,15 @@ impl LutLang {
         for c in self.children() {
             let t = &expr[*c];
             t.verify_rec(expr)?;
-            match self {
-                LutLang::Lut(l) => {
-                    if let LutLang::Program(p) = expr[l[0]] {
-                        let k = l.len() - 1;
-                        if k < Self::MAX_LUT_SIZE && p >= (1 << (1 << k)) {
-                            return Err("Program too large for LUT".to_string());
-                        }
-                    } else {
-                        return Err("LUT must have a program".to_string());
+            if let LutLang::Lut(l) = self {
+                if let LutLang::Program(p) = expr[l[0]] {
+                    let k = l.len() - 1;
+                    if k < Self::MAX_LUT_SIZE && p >= (1 << (1 << k)) {
+                        return Err("Program too large for LUT".to_string());
                     }
+                } else {
+                    return Err("LUT must have a program".to_string());
                 }
-                _ => (),
             }
         }
         Ok(())
@@ -218,8 +212,7 @@ impl LutLang {
         let mut children_inputs: Vec<String> = self
             .children()
             .iter()
-            .map(|c| expr[*c].get_inputs_rec(expr))
-            .flatten()
+            .flat_map(|c| expr[*c].get_inputs_rec(expr))
             .collect();
         inputs.append(&mut children_inputs);
         inputs
@@ -236,14 +229,14 @@ impl LutLang {
     /// this funcion returns true if they represent the same boolean function
     pub fn func_equiv_always(expr: &RecExpr<Self>, other: &RecExpr<Self>) -> bool {
         let root = &expr[(expr.as_ref().len() - 1).into()];
-        let inputs = root.get_input_set(&expr);
+        let inputs = root.get_input_set(expr);
         for i in 0..1 << inputs.len() {
             let input_map = inputs
                 .iter()
                 .cloned()
                 .zip((0..inputs.len()).map(|j| (i >> j) & 1 == 1))
                 .collect();
-            let result = Self::func_equiv(&expr, &other, &input_map);
+            let result = Self::func_equiv(expr, other, &input_map);
             if !result {
                 return false;
             }
@@ -302,7 +295,7 @@ pub fn eval_lut_const_input(p: &u64, msb: usize, v: bool) -> u64 {
     if v {
         p >> (1 << msb)
     } else {
-        p & (1 << (1 << msb)) - 1
+        p & ((1 << (1 << msb)) - 1)
     }
 }
 
@@ -314,15 +307,15 @@ pub fn swap_pos(bv: &u64, k: usize, pos: usize) -> u64 {
     for i in 0..(1 << k) {
         list.push(to_bitvec(i, k));
     }
-    for i in 0..(1 << k) {
-        let tmp = list[i][pos];
-        let tmp2 = list[i][pos + 1];
-        list[i].set(pos, tmp2);
-        list[i].set(pos + 1, tmp);
+    for table in list.iter_mut().take(1 << k) {
+        let tmp = table[pos];
+        let tmp2 = table[pos + 1];
+        table.set(pos, tmp2);
+        table.set(pos + 1, tmp);
     }
     let mut nbv: BitVec = bitvec!(usize, Lsb0; 0; 1 << k);
-    for i in 0..(1 << k) {
-        let index = from_bitvec(&list[i]) as usize;
+    for (i, table) in list.iter().enumerate().take(1 << k) {
+        let index = from_bitvec(table) as usize;
         nbv.set(index, eval_lut_bv(*bv, &to_bitvec(i as u64, k)));
     }
     from_bitvec(&nbv)

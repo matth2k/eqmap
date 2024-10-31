@@ -14,7 +14,7 @@ pub struct KLUTCostFn {
 impl KLUTCostFn {
     /// Returns a new cost function with the given `k` value.
     pub fn new(k: usize) -> Self {
-        if k < 1 || k > LutLang::MAX_LUT_SIZE {
+        if !(1..=LutLang::MAX_LUT_SIZE).contains(&k) {
             panic!("k must be between 1 and {}", LutLang::MAX_LUT_SIZE);
         }
         Self { k }
