@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use super::analysis::LutAnalysis;
 use bitvec::prelude::*;
 use egg::define_language;
+use egg::CostFunction;
 use egg::Id;
 use egg::Language;
 use egg::RecExpr;
@@ -31,6 +32,11 @@ define_language! {
 }
 
 impl LutLang {
+    /// Maximum size allowed for a LUT.
+    /// This cannot be made larger due to us using `u64` to represent LUTs. FPGAs generally do not
+    /// support greater than 6-LUTs so this limit should hopefully be sufficient forever.
+    pub const MAX_LUT_SIZE: usize = 6;
+
     /// Verify the grammar of a single [LutLang] node
     fn verify(&self) -> Result<(), String> {
         match self {
@@ -38,8 +44,11 @@ impl LutLang {
                 let l = list.len();
                 if l == 0 {
                     return Err("LUT must have at least one element".to_string());
-                } else if l - 1 > 6 {
-                    return Err("Only 6-Luts or smaller supported".to_string());
+                } else if l - 1 > Self::MAX_LUT_SIZE {
+                    return Err(format!(
+                        "Only {}-Luts or smaller supported",
+                        Self::MAX_LUT_SIZE
+                    ));
                 } else {
                     Ok(())
                 }
@@ -67,7 +76,7 @@ impl LutLang {
                 LutLang::Lut(l) => {
                     if let LutLang::Program(p) = expr[l[0]] {
                         let k = l.len() - 1;
-                        if k < 6 && p >= (1 << (1 << k)) {
+                        if k < Self::MAX_LUT_SIZE && p >= (1 << (1 << k)) {
                             return Err("Program too large for LUT".to_string());
                         }
                     } else {
@@ -317,4 +326,67 @@ pub fn swap_pos(bv: &u64, k: usize, pos: usize) -> u64 {
         nbv.set(index, eval_lut_bv(*bv, &to_bitvec(i as u64, k)));
     }
     from_bitvec(&nbv)
+}
+
+/// The size of a given LUT.
+enum LutSize {
+    /// A LUT of given size.
+    Size(usize),
+    /// A LUT of any size. A wildcard in a sense.
+    Any,
+}
+
+/// A cost function counting LUTs of a given size.
+struct NumKLUTsCostFn {
+    size: LutSize,
+}
+
+impl NumKLUTsCostFn {
+    /// Returns a new cost function counting LUTs of `size`.
+    pub fn new(size: LutSize) -> Self {
+        const TOO_LARGE: usize = LutLang::MAX_LUT_SIZE + 1;
+        match size {
+            LutSize::Size(0) | LutSize::Size(TOO_LARGE..) => {
+                panic!("k must be between 1 and {}", LutLang::MAX_LUT_SIZE)
+            }
+            size => Self { size },
+        }
+    }
+}
+
+impl CostFunction<LutLang> for NumKLUTsCostFn {
+    type Cost = u64;
+    fn cost<C>(&mut self, enode: &LutLang, mut costs: C) -> Self::Cost
+    where
+        C: FnMut(Id) -> Self::Cost,
+    {
+        let op_cost = match enode {
+            LutLang::Lut(l) => match self.size {
+                LutSize::Size(k) if l.len() == k + 1 => 1,
+                LutSize::Any => 1,
+                LutSize::Size(_) => 0,
+            },
+            LutLang::Program(_)
+            | LutLang::Const(_)
+            | LutLang::Var(_)
+            | LutLang::DC
+            | LutLang::Nor(_)
+            | LutLang::Mux(_)
+            | LutLang::And(_)
+            | LutLang::Xor(_)
+            | LutLang::Not(_) => 0,
+        };
+        enode.fold(op_cost, |sum, id| sum + costs(id))
+    }
+}
+
+/// Returns the number of luts in the given expr.
+pub fn get_lut_count(expr: &RecExpr<LutLang>) -> u64 {
+    NumKLUTsCostFn::new(LutSize::Any).cost_rec(expr)
+}
+
+/// Returns the number of k-luts in the given expr.
+pub fn get_lut_count_k(expr: &RecExpr<LutLang>, k: usize) -> u64 {
+    let size = LutSize::Size(k);
+    NumKLUTsCostFn::new(size).cost_rec(expr)
 }
