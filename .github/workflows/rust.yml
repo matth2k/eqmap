@@ -49,16 +49,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install FileCheck
+        run: sudo add-apt-repository universe && sudo apt-get update && sudo apt-get install llvm-15-tools && sudo ln -s /usr/bin/FileCheck-15 /usr/bin/FileCheck
       - name: Build (debug)
         run: cargo build --verbose
       - name: Build (release)
         run: cargo build --release --verbose
       - name: Run cargo tests (release)
         run: cargo test --release --verbose
-      - name: Run integration tests (debug)
-        run: cargo run tests/examples.txt > examples_debug.out && diff examples_debug.out tests/examples.out
-      - name: Run integration tests (debug, verbose)
-        run: cargo run tests/examples.txt --verbose > examples_debug_verbose.out && diff examples_debug_verbose.out tests/examples.out
+      - name: Run integration tests
+        run: chmod +x utils/runTests.sh && ./utils/runTests.sh
 
   speed:
     name: Test Speed
@@ -70,13 +70,13 @@ jobs:
       - name: Build (release)
         run: cargo build --release --verbose
       - name: Run integration tests (release, )
-        run: time cargo run --release -- tests/hard_examples.txt
+        run: time cargo run --release -- tests/lutlang/hard_examples.txt
       - name: Run integration tests (release, proof gen)
-        run: time cargo run --release -- tests/hard_examples.txt --verbose
+        run: time cargo run --release -- tests/lutlang/hard_examples.txt --verbose
       - name: Run comparator (release, proof gen)
-        run: time cargo run --release -- tests/gate_compare.txt --verbose
+        run: time cargo run --release -- tests/lutlang/gate_compare.txt --verbose
       - name: Run comparator (release,)
-        run: time cargo run --release -- tests/gate_compare.txt
+        run: time cargo run --release -- tests/lutlang/gate_compare.txt
 
   coverage:
     name: Code Coverage
@@ -89,9 +89,9 @@ jobs:
       - name: Generate code coverage
         run: cargo llvm-cov --all-features --workspace --json > coverage.json
       - name: Coverage (60% by line)
-        run: python3 utils/min-coverage.py -p 60.0 coverage.json --whitelist main.rs >> $GITHUB_STEP_SUMMARY
+        run: python3 utils/min-coverage.py -p 60.0 coverage.json --whitelist main.rs parse-verilog.rs >> $GITHUB_STEP_SUMMARY
       - name: Coverage (80% by line)
-        run: python3 utils/min-coverage.py -p 80.0 coverage.json --whitelist main.rs >> $GITHUB_STEP_SUMMARY
+        run: python3 utils/min-coverage.py -p 80.0 coverage.json --whitelist main.rs parse-verilog.rs >> $GITHUB_STEP_SUMMARY
 
   mdformat:
     name: Markdown format
