@@ -17,8 +17,8 @@ pub mod rewrite;
 #[cfg(test)]
 mod tests {
     use analysis::LutAnalysis;
-    use egg::{Analysis, RecExpr};
-    use lut::{verify_expr, LutLang};
+    use egg::{Analysis, Language, RecExpr};
+    use lut::{node_dominates, verify_expr, LutLang};
     use parse::{sv_parse_wrapper, SVModule, SVPrimitive};
 
     use super::*;
@@ -220,5 +220,74 @@ mod tests {
         assert!(prim.add_signal("Y".to_string(), "b".to_string()).is_ok());
         assert!(prim.add_signal("Y".to_string(), "b".to_string()).is_err());
         assert!(prim.add_signal("bad".to_string(), "a".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_bus_type() {
+        let bus: RecExpr<LutLang> = "(BUS (LUT 202 s0 a b) (MUX s0 a b))".parse().unwrap();
+        let swapped: RecExpr<LutLang> = "(BUS (MUX s0 a b) (LUT 202 s0 a b))".parse().unwrap();
+        assert!(LutLang::func_equiv_always(&bus, &swapped));
+    }
+
+    #[test]
+    fn test_bad_bus() {
+        let bus: RecExpr<LutLang> =
+            "(BUS (BUS (LUT 202 s0 a b) (MUX s0 a b)) (BUS (LUT 202 s0 a b) (MUX s0 a b)))"
+                .parse()
+                .unwrap();
+        let root = bus.as_ref().last().unwrap();
+        assert!(root.verify_rec(&bus).is_err());
+
+        let bus: RecExpr<LutLang> = "(BUS 1234 12346)".parse().unwrap();
+        let root = bus.as_ref().last().unwrap();
+        assert!(root.verify_rec(&bus).is_err());
+
+        let bus: RecExpr<LutLang> = "(BUS a1 a2)".parse().unwrap();
+        let root = bus.as_ref().last().unwrap();
+        assert!(root.verify_rec(&bus).is_ok());
+    }
+
+    #[test]
+    fn test_not_equiv() {
+        let xor: RecExpr<LutLang> = "(XOR a b)".parse().unwrap();
+        let nor: RecExpr<LutLang> = "(NOR a b)".parse().unwrap();
+        assert!(LutLang::func_equiv_always(
+            &xor,
+            &"(LUT 6 a b)".parse().unwrap()
+        ));
+        assert!(!LutLang::func_equiv_always(
+            &xor,
+            &"(LUT 4 a b)".parse().unwrap()
+        ));
+        assert!(!LutLang::func_equiv_always(
+            &xor,
+            &"(LUT 2 a b)".parse().unwrap()
+        ));
+        assert!(LutLang::func_equiv_always(
+            &nor,
+            &"(LUT 1 a b)".parse().unwrap()
+        ));
+        assert!(!LutLang::func_equiv_always(&xor, &nor));
+    }
+
+    #[test]
+    fn test_dominance() {
+        let bus: RecExpr<LutLang> =
+            "(BUS (XOR (XOR a b) cin) (NOT (NOR (AND a b) (AND cin (XOR a b)))) (XOR a b) (AND a b))"
+                .parse()
+                .unwrap();
+        let bus_node = bus.as_ref().last().unwrap();
+        let sum = bus_node.children()[0];
+        let carry = bus_node.children()[1];
+        let xor = bus_node.children()[2];
+        let and = bus_node.children()[3];
+        assert!(!node_dominates(&bus, sum, carry).unwrap());
+        assert!(!node_dominates(&bus, carry, sum).unwrap());
+        assert!(node_dominates(&bus, sum, sum).unwrap());
+        assert!(node_dominates(&bus, carry, carry).unwrap());
+        assert!(node_dominates(&bus, xor, carry).unwrap());
+        assert!(node_dominates(&bus, xor, sum).unwrap());
+        assert!(node_dominates(&bus, and, carry).unwrap());
+        assert!(!node_dominates(&bus, and, sum).unwrap());
     }
 }
