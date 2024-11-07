@@ -4,13 +4,16 @@ use std::{
 };
 
 use clap::Parser;
-use lut_synth::parse::{sv_parse_wrapper, SVModule};
+use lut_synth::verilog::{sv_parse_wrapper, SVModule};
 /// Parse structural verilog into a LutLang Expression
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
     /// Path to input file. If not provided, reads from stdin
     input: Option<PathBuf>,
+    /// Print explanations (this generates a proof and runs longer)
+    #[arg(short = 'r', long, default_value_t = false)]
+    round_trip: bool,
 }
 
 fn main() -> std::io::Result<()> {
@@ -34,11 +37,14 @@ fn main() -> std::io::Result<()> {
     let f =
         SVModule::from_ast(&ast).map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
 
-    let expr = f
-        .to_expr()
-        .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
-
-    println!("{}", expr);
+    if !args.round_trip {
+        let expr = f
+            .to_expr()
+            .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+        println!("{}", expr);
+    } else {
+        println!("{}", f);
+    }
 
     Ok(())
 }
