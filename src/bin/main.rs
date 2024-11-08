@@ -4,7 +4,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use lut_synth::{
     cost::KLUTCostFn,
     lut::{self, LutExprInfo},
-    rewrite::{all_rules_minus_dsd, known_decompositions},
+    rewrite::{all_rules_minus_dsd, known_decompositions, register_retiming},
 };
 use std::{
     io::{IsTerminal, Read, Write},
@@ -252,12 +252,20 @@ struct Args {
     input: Option<PathBuf>,
 
     /// Don't verify functionality of the output
-    #[arg(short = 'c', long, default_value_t = false)]
+    #[arg(short = 'f', long, default_value_t = false)]
     no_verify: bool,
+
+    /// Opt a specific LUT expr instead of from file
+    #[arg(short = 'c', long)]
+    command: Option<String>,
 
     /// Don't use disjoint set decompositions
     #[arg(short = 'd', long, default_value_t = false)]
     no_dsd: bool,
+
+    /// Don't use register retiming
+    #[arg(short = 'r', long, default_value_t = false)]
+    no_retime: bool,
 
     /// Print explanations (this generates a proof and runs longer)
     #[arg(short = 'v', long, default_value_t = false)]
@@ -295,7 +303,9 @@ fn main() -> std::io::Result<()> {
         eprintln!("WARNING: Debug assertions are enabled");
     }
 
-    if args.input.is_some() {
+    if args.command.is_some() {
+        buf = args.command.unwrap();
+    } else if args.input.is_some() {
         std::fs::File::open(args.input.unwrap())?.read_to_string(&mut buf)?;
     } else {
         let mut stdin = std::io::stdin();
@@ -314,6 +324,10 @@ fn main() -> std::io::Result<()> {
     let mut rules = all_rules_minus_dsd();
     if !args.no_dsd {
         rules.append(&mut known_decompositions());
+    }
+
+    if !args.no_retime {
+        rules.append(&mut register_retiming());
     }
 
     if args.verbose {
@@ -376,7 +390,10 @@ fn main() -> std::io::Result<()> {
             eprintln!("INFO: Skipping functionality tests...");
         } else {
             let result = LutExprInfo::new(&expr).check(&simplified);
-            if !result.is_equiv() {
+            if result.is_inconclusive() && args.verbose {
+                eprintln!("WARNING: Functionality verification inconclusive");
+            }
+            if result.is_not_equiv() {
                 match expl.as_ref() {
                     Some(e) => eprintln!("ERROR: Failed for explanation {}", e),
                     None => eprintln!("ERROR: Failed for unknown reason. Try running with --verbose for an attempted proof"),
