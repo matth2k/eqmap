@@ -127,6 +127,7 @@ impl LutLang {
     }
 
     /// Extract the operand class ids from a [LutLang::Lut] contained in `egraph`
+    /// This filters out unwanted leaf nodes, like Programs.
     pub fn get_operand_classes(
         &self,
         _egraph: &egg::EGraph<LutLang, LutAnalysis>,
@@ -430,6 +431,23 @@ pub fn eval_lut_bv(p: u64, inputs: &BitVec) -> bool {
         }
     }
     (p >> index) & 1 == 1
+}
+
+/// Removes last operand from LUT. Assumes LUT is invariant to last/lsb operand.
+pub fn remove_lsb_var(p: u64, k: usize) -> Option<u64> {
+    if k < 2 {
+        return None;
+    }
+
+    let bv = to_bitvec(p, 1 << k).unwrap();
+    let mut nbv = BitVec::with_capacity(1 << (k - 1));
+    for bv in bv.chunks(2) {
+        if bv[0] != bv[1] {
+            return None;
+        }
+        nbv.push(bv[0]);
+    }
+    Some(from_bitvec(&nbv))
 }
 
 /// Return a partially-evaluated LUT program with the `msb` input tied to the constant `v`

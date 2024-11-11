@@ -103,16 +103,28 @@ impl Analysis<lut::LutLang> for LutAnalysis {
         }
     }
     fn modify(egraph: &mut egg::EGraph<lut::LutLang, Self>, id: egg::Id) {
-        // Evaluate constant input at the msb
         let nodes = egraph[id].nodes.clone();
         for node in nodes {
             if let lut::LutLang::Lut(_) = node {
                 let operands = node.get_operand_classes(egraph).expect("Expected operands");
                 let msb_const = egraph[operands[0]].data.get_as_const();
+                let program = node
+                    .get_program_in_egraph(egraph)
+                    .expect("Expected program");
+                let k = operands.len();
+
+                // Refactor LUT invariant to input at lsb
+                if let Some(np) = lut::remove_lsb_var(program, k) {
+                    let mut c = operands.clone();
+                    let pi = egraph.add(lut::LutLang::Program(np));
+                    c.pop();
+                    c.insert(0, pi);
+                    let repl = egraph.add(lut::LutLang::Lut(c.into()));
+                    egraph.union(id, repl);
+                }
+
+                // Evaluate constant input at the msb
                 if msb_const.is_ok() {
-                    let program = node
-                        .get_program_in_egraph(egraph)
-                        .expect("Expected program");
                     if operands.len() > 1 {
                         let mod_program = lut::eval_lut_const_input(
                             &program,
