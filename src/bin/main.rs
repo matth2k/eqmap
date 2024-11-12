@@ -113,6 +113,16 @@ where
         fold_expr_greedily(req.expr.clone())
     };
 
+    if req.gen_proof {
+        let info = LutExprInfo::new(req.expr);
+        if info.check(&expr).is_not_equiv() {
+            return Err(format!(
+                "Folding the initial expression had an error: {}",
+                expr
+            ));
+        }
+    }
+
     let mut runner = runner.with_expr(&expr).run(req.rules);
 
     // Clear the progress bar
@@ -167,6 +177,7 @@ fn simplify(s: &str) -> String {
     let expr: RecExpr<lut::LutLang> = s.parse().unwrap();
     let mut rules = all_rules_minus_dsd();
     rules.append(&mut known_decompositions());
+    rules.append(&mut register_retiming());
 
     let req = SimplifyRequest {
         expr: &expr,
@@ -191,6 +202,7 @@ fn simplify_w_proof(s: &str) -> String {
     let expr: RecExpr<lut::LutLang> = s.parse().unwrap();
     let mut rules = all_rules_minus_dsd();
     rules.append(&mut known_decompositions());
+    rules.append(&mut register_retiming());
 
     let req = SimplifyRequest {
         expr: &expr,
@@ -260,13 +272,27 @@ fn test_incorrect_dsd() {
 }
 
 #[test]
-#[cfg(feature = "egraph_fold")]
 fn test_greedy_folds() {
-    // TODO(matth2k): Don't yet have a general method to show that an LUT is invariant to an input.
     assert_eq!(simplify("(LUT 202 true a b)"), "a");
     assert_eq!(simplify("(LUT 0 a)"), "false");
     assert_eq!(simplify("(LUT 3 a)"), "true");
     assert_eq!(simplify("(LUT 3 a b c)"), "(LUT 1 a b)");
+    assert_eq!(
+        fold_expr_greedily(
+            "(LUT 6 true (LUT 6 false (LUT 6 true false)))"
+                .parse()
+                .unwrap()
+        )
+        .to_string(),
+        "false"
+    );
+}
+
+#[test]
+fn test_exploration() {
+    // Since we have greedy folding now,
+    // we need different kinds of inputs that don't optimize as well
+    assert_eq!(simplify("(LUT 6 (LUT 6 c d) b)"), "(LUT 150 c d b)")
 }
 
 /// LUT Network Synthesis with E-Graphs
@@ -320,11 +346,11 @@ struct Args {
     timeout: u64,
 
     /// Maximum number of nodes in graph
-    #[arg(short = 's', long, default_value_t = 18_000)]
+    #[arg(short = 's', long, default_value_t = 24_000)]
     node_limit: usize,
 
     /// Maximum number of rewrite iterations
-    #[arg(short = 'n', long, default_value_t = 24)]
+    #[arg(short = 'n', long, default_value_t = 32)]
     iter_limit: usize,
 }
 
