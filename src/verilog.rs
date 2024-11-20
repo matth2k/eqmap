@@ -65,6 +65,46 @@ pub fn get_identifier(node: RefNode, ast: &sv_parser::SyntaxTree) -> Result<Stri
     }
 }
 
+fn init_format(program: u64, k: usize) -> Result<String, ()> {
+    let w = 1 << k;
+    match k {
+        1 => Ok(format!("{}'h{:01x}", w, program)),
+        2 => Ok(format!("{}'h{:01x}", w, program)),
+        3 => Ok(format!("{}'h{:02x}", w, program)),
+        4 => Ok(format!("{}'h{:04x}", w, program)),
+        5 => Ok(format!("{}'h{:08x}", w, program)),
+        6 => Ok(format!("{}'h{:016x}", w, program)),
+        _ => Err(()),
+    }
+}
+
+fn init_parser(v: &str) -> Result<u64, String> {
+    let split = v.split("'").collect::<Vec<&str>>();
+    if split.len() != 2 {
+        return Err("Expected a literal with specific bitwidth/format".to_string());
+    }
+    let literal = split[1];
+    if let Some(l) = split[1].strip_prefix('h') {
+        u64::from_str_radix(l, 16).map_err(|e| e.to_string())
+    } else if let Some(l) = literal.strip_prefix('d') {
+        l.parse::<u64>().map_err(|e| e.to_string())
+    } else {
+        Err("Expected a literal with specific bitwidth/format".to_string())
+    }
+}
+
+#[test]
+fn test_verilog_literals() {
+    assert_eq!(init_parser("8'hff").unwrap(), 0xff);
+    assert_eq!(init_parser("8'h00").unwrap(), 0x00);
+    assert_eq!(init_parser("8'h0f").unwrap(), 0x0f);
+    assert_eq!(init_parser("8'd255").unwrap(), 255);
+    assert_eq!(init_format(1, 1), Ok("2'h1".to_string()));
+    assert_eq!(init_format(1, 5), Ok("32'h00000001".to_string()));
+    assert!(init_parser("1'hx").is_err());
+    assert!(init_parser("1'hz").is_err());
+}
+
 const CLK: &str = "clk";
 const REG_NAME: &str = "FDRE";
 const LUT_ROOT: &str = "LUT";
@@ -112,7 +152,7 @@ impl SVPrimitive {
     /// Create a new unconnected LUT primitive with size `k`, instance name `name`, and program `program`
     pub fn new_lut(k: usize, name: String, program: u64) -> Self {
         let mut attributes = BTreeMap::new();
-        attributes.insert("INIT".to_string(), format!("64'h{:016x}", program));
+        attributes.insert("INIT".to_string(), init_format(program, k).unwrap());
         SVPrimitive {
             prim: format!("{}{}", LUT_ROOT, k),
             name,
@@ -380,8 +420,8 @@ impl SVModule {
 
                     if let Some(k) = Self::is_lut_prim(&mod_name) {
                         let id = unwrap_node!(inst, NamedParameterAssignment).unwrap();
-                        let program: u64 =
-                            if let RefNode::HexValue(v) = unwrap_node!(id, HexValue).unwrap() {
+                        let program: u64 = match unwrap_node!(id, HexValue, UnsignedNumber) {
+                            Some(RefNode::HexValue(v)) => {
                                 let loc = v.nodes.0;
                                 let loc = ast.get_str(&loc).unwrap();
                                 match u64::from_str_radix(loc, 16) {
@@ -393,12 +433,27 @@ impl SVModule {
                                         ))
                                     }
                                 }
-                            } else {
+                            }
+                            Some(RefNode::UnsignedNumber(v)) => {
+                                let loc = v.nodes.0;
+                                let loc = ast.get_str(&loc).unwrap();
+                                match loc.parse::<u64>() {
+                                    Ok(x) => x,
+                                    Err(_) => {
+                                        return Err(format!(
+                                            "Could not parse decimal value from INIT string {}",
+                                            loc
+                                        ))
+                                    }
+                                }
+                            }
+                            _ => {
                                 return Err(format!(
                                     "{} {} should have INIT value written in hexadecimal",
                                     LUT_ROOT, mod_name
                                 ));
-                            };
+                            }
+                        };
                         cur_insts.push(SVPrimitive::new_lut(k, inst_name, program));
                         continue;
                     }
@@ -629,10 +684,7 @@ impl SVModule {
                     Ok(expr.add(LutLang::Reg([d])))
                 } else {
                     let mut subexpr: Vec<Id> = vec![];
-                    let program: u64 = match program.strip_prefix("64'h") {
-                        Some(p) => u64::from_str_radix(p, 16).unwrap(),
-                        None => program.parse().unwrap(),
-                    };
+                    let program: u64 = init_parser(program)?;
                     subexpr.push(expr.add(LutLang::Program(program)));
                     for input in (0..primitive.inputs.len()).rev().map(|x| format!("I{}", x)) {
                         let driver = primitive

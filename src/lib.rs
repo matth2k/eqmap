@@ -363,7 +363,7 @@ endmodule"
   wire tmp5;
   wire tmp8;
   LUT3 #(
-      .INIT(64'h00000000000000ca)
+      .INIT(8'hca)
   ) __0__ (
       .I0(b),
       .I1(a),
@@ -371,7 +371,7 @@ endmodule"
       .O(tmp5)
   );
   LUT3 #(
-      .INIT(64'h00000000000000ca)
+      .INIT(8'hca)
   ) __1__ (
       .I0(d),
       .I1(c),
@@ -379,12 +379,43 @@ endmodule"
       .O(tmp8)
   );
   LUT3 #(
-      .INIT(64'h00000000000000ca)
+      .INIT(8'hca)
   ) __2__ (
       .I0(tmp8),
       .I1(tmp5),
       .I2(s1),
       .O(y)
+  );
+endmodule"
+            .to_string();
+        assert_eq!(module.to_string(), golden);
+    }
+
+    #[test]
+    fn test_emit_reg() {
+        let reg: RecExpr<LutLang> = "(REG a)".parse().unwrap();
+        let module = SVModule::from_expr(reg, "my_reg".to_string(), Vec::new());
+        assert!(module.is_ok());
+        let module = module.unwrap();
+        let golden = "module my_reg (
+    a,
+    clk,
+    y
+);
+  input a;
+  wire a;
+  input clk;
+  wire clk;
+  output y;
+  wire y;
+  FDRE #(
+      .INIT(1'hx)
+  ) __0__ (
+      .C(clk),
+      .CE(1'h1),
+      .D(a),
+      .R(1'h0),
+      .Q(y)
   );
 endmodule"
             .to_string();
