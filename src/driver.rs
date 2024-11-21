@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use super::cost::KLUTCostFn;
-use super::lut::{canonicalize_expr, LutExprInfo, LutLang};
+use super::lut::{canonicalize_expr, verify_expr, LutExprInfo, LutLang};
 use egg::{Analysis, BackoffScheduler, Explanation, Extractor, Language, RecExpr, Rewrite, Runner};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
@@ -16,6 +16,57 @@ use std::{
 };
 
 const MAX_CANON_SIZE: usize = 30000;
+
+/// The output of a [SynthRequest] run.
+pub struct SynthOutput {
+    expr: RecExpr<LutLang>,
+    expl: Option<Explanation<LutLang>>,
+}
+
+impl SynthOutput {
+    /// Get the expression of the output.
+    pub fn get_expr(&self) -> &RecExpr<LutLang> {
+        &self.expr
+    }
+
+    /// Get the explanation of the output.
+    pub fn get_expl(&self) -> &Option<Explanation<LutLang>> {
+        &self.expl
+    }
+
+    /// Get the proof of the output.
+    pub fn get_proof(&mut self) -> String {
+        if self.has_explanation() {
+            self.expl.as_mut().unwrap().get_flat_string()
+        } else {
+            String::new()
+        }
+    }
+
+    /// Get the analysis for an output expression.
+    pub fn get_analysis(&self) -> LutExprInfo {
+        LutExprInfo::new(&self.expr)
+    }
+
+    /// Check if the output has an explanation.
+    pub fn has_explanation(&self) -> bool {
+        self.expl.is_some()
+    }
+
+    /// Check if the output is empty.
+    pub fn is_empty(&self) -> bool {
+        self.expr.as_ref().is_empty()
+    }
+}
+
+impl std::fmt::Display for SynthOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if self.expr.as_ref().is_empty() {
+            return Ok(());
+        }
+        write!(f, "{}", self.expr)
+    }
+}
 
 /// Update a progress bar with the current state of the runner.
 fn report_progress<L, A>(
@@ -271,9 +322,7 @@ where
     }
 
     /// simplify `expr` using egg with at most `k` fan-in on LUTs
-    pub fn simplify_expr(
-        &mut self,
-    ) -> Result<(RecExpr<LutLang>, Option<Explanation<LutLang>>), String>
+    pub fn simplify_expr(&mut self) -> Result<SynthOutput, String>
     where
         A: Analysis<LutLang> + std::default::Default,
     {
@@ -321,7 +370,7 @@ where
                 stop_reason
             );
         }
-        Ok((best, expl))
+        Ok(SynthOutput { expr: best, expl })
     }
 }
 
@@ -347,4 +396,78 @@ pub fn simple_reader(cmd: Option<String>, input_file: Option<PathBuf>) -> std::i
     }
 
     Ok(buf)
+}
+
+/// Compile a [LutLang] expression from a line of text using a baseline request `req`.
+/// Only the output expression is printed to stdout. Everything else goes to stderr.
+pub fn process_expression<A>(
+    line: &str,
+    req: SynthRequest<A>,
+    no_verify: bool,
+    verbose: bool,
+) -> std::io::Result<SynthOutput>
+where
+    A: Analysis<LutLang> + Clone + Default,
+{
+    let line = line.trim();
+    if line.starts_with("//") || line.is_empty() {
+        return Ok(SynthOutput {
+            expr: RecExpr::default(),
+            expl: None,
+        });
+    }
+    let expr = line.split("//").next().unwrap();
+    let expr: RecExpr<LutLang> = expr
+        .parse()
+        .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+
+    if no_verify {
+        verify_expr(&expr).map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+    }
+
+    if cfg!(debug_assertions) {
+        eprintln!("WARNING: Running with debug assertions is slow");
+    }
+
+    let mut req = req.clone().with_expr(expr.clone());
+
+    let mut result = req
+        .simplify_expr()
+        .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+
+    if verbose && result.has_explanation() {
+        let proof = result.get_proof();
+        let mut linecount = 0;
+        for line in proof.lines() {
+            eprintln!("INFO: {}", line);
+            linecount += 1;
+        }
+        eprintln!("INFO: Approx. {} lines in proof tree", linecount);
+        eprintln!("INFO: ============================================================");
+    } else {
+        eprintln!("{} => ", expr);
+    }
+
+    let simplified = result.get_expr();
+
+    // Verify functionality
+    if no_verify {
+        eprintln!("INFO: Skipping functionality tests...");
+    } else {
+        let check = LutExprInfo::new(&expr).check(simplified);
+        if check.is_inconclusive() && verbose {
+            eprintln!("WARNING: Functionality verification inconclusive");
+        }
+        if check.is_not_equiv() {
+            match result.get_expl() {
+                Some(e) => eprintln!("ERROR: Failed for explanation {}", e),
+                None => eprintln!("ERROR: Failed for unknown reason. Try running with --verbose for an attempted proof"),
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Functionality verification failed",
+            ));
+        }
+    }
+    Ok(result)
 }
