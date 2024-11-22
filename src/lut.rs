@@ -329,39 +329,35 @@ impl LutLang {
         }
     }
 
-    /// Folds the lut with children contained in `expr` and program in `pexpr` into a new expression in `dest`
+    /// Folds the lut with children contained in `expr` into a new expression in `dest`
     /// This method does not insert the node itself into `dest`. It only inserts the new program node.
-    fn fold_lut(
-        self,
-        expr: &RecExpr<Self>,
-        pexpr: &RecExpr<Self>,
-        dest: &mut RecExpr<Self>,
-    ) -> (Self, RecExpr<Self>) {
+    fn fold_lut(self, expr: &RecExpr<Self>, dest: &mut RecExpr<Self>) -> (Self, bool) {
         let l = self.children();
         // We might have settled on a constant/leaf
         if !matches!(self, LutLang::Lut(_)) {
-            return (self, pexpr.clone());
+            return (self, false);
         }
         assert!(l.len() > 1);
         let k = l.len() - 1;
-        let program = self.get_program(pexpr).unwrap();
+        let program = self.get_program(expr).unwrap();
 
         if k == 1 {
             let n = match program & 3 {
                 0 => LutLang::Const(false),
                 3 => LutLang::Const(true),
-                2 => return (expr[l[1]].clone(), expr.clone()),
+                2 => {
+                    return expr[l[1]].clone().fold_lut(expr, dest);
+                }
                 1 => {
-                    let (fold, _fexpr) = expr[l[1]].clone().fold_lut_rec(expr, dest);
-                    if let LutLang::Const(b) = fold {
+                    if let LutLang::Const(b) = expr[l[1]] {
                         LutLang::Const(!b)
                     } else {
-                        self
+                        return (self, false);
                     }
                 }
                 _ => unreachable!(),
             };
-            (n, pexpr.clone())
+            (n, true)
         } else {
             // Evaluate constant inputs
             for (pos, c) in l[1..].iter().enumerate() {
@@ -378,7 +374,7 @@ impl LutLang {
                     let mut c = l.to_vec();
                     c[0] = np;
                     c.remove(pos + 1);
-                    return (LutLang::Lut(c.into()), dest.clone());
+                    return (LutLang::Lut(c.into()), true);
                 }
             }
 
@@ -403,29 +399,13 @@ impl LutLang {
                     let mut c = l.to_vec();
                     c[0] = np;
                     c.remove(pos + 1);
-                    return (LutLang::Lut(c.into()), dest.clone());
+                    return (LutLang::Lut(c.into()), true);
                 } else {
                     continue;
                 }
             }
-            (self, pexpr.clone())
+            (self, false)
         }
-    }
-
-    /// Continuously folds the lut with children contained in `expr` into a new expression in `dest`
-    /// This method does not insert the node itself into `dest`. It only inserts the new program node.
-    pub fn fold_lut_rec(
-        self,
-        expr: &RecExpr<Self>,
-        dest: &mut RecExpr<Self>,
-    ) -> (Self, RecExpr<Self>) {
-        let mut init = self.clone();
-        let (mut folded, mut pexpr) = self.fold_lut(expr, expr, dest);
-        while init != folded {
-            init = folded.clone();
-            (folded, pexpr) = folded.fold_lut(expr, &pexpr, dest);
-        }
-        (folded, pexpr)
     }
 
     /// Given two expressions and a set of input values,
@@ -455,6 +435,19 @@ impl LutLang {
             }
         }
         equivalent()
+    }
+
+    /// Returns the Verilog primitive name for a node type
+    pub fn get_prim_name(&self) -> Option<String> {
+        match self {
+            LutLang::Nor(_) => Some("NOR2".to_string()),
+            LutLang::Mux(_) => Some("MUX".to_string()),
+            LutLang::And(_) => Some("AND2".to_string()),
+            LutLang::Xor(_) => Some("XOR2".to_string()),
+            LutLang::Not(_) => Some("NOT".to_string()),
+            LutLang::Lut(l) => Some(format!("LUT{}", l.len() - 1)),
+            _ => None,
+        }
     }
 }
 
@@ -670,6 +663,20 @@ impl<'a> LutExprInfo<'a> {
         self.expr.clone()
     }
 
+    /// Return a copy of the expression that is not redundant.
+    pub fn get_cse(&self) -> RecExpr<LutLang> {
+        let cse = if self.is_reduntant() {
+            fold_expr_greedily(self.expr.clone(), |e, _d, id| (e[id].clone(), false)).0
+        } else {
+            self.expr.clone()
+        };
+
+        // TODO(matth2k): Remove this once folding is more trustworthy
+        let info = LutExprInfo::new(&cse);
+        assert!(!info.is_reduntant());
+        cse
+    }
+
     /// Return a canonicalization of the expression.
     pub fn get_canonicalization(&self) -> RecExpr<LutLang> {
         if self.is_canonical() {
@@ -791,17 +798,17 @@ impl<'a> LutExprInfo<'a> {
 
 /// Folds a node at `expr[id]` into a new expression in `dest`.
 /// This method *does* insert the node and uses `mapping` to faciliate subexpression reuse.
-fn fold_node_into(
+fn fold_node_into<F>(
     expr: &RecExpr<LutLang>,
     id: Id,
     dest: &mut RecExpr<LutLang>,
     mapping: &mut HashMap<Id, Id>,
-) -> Id {
-    let node = &expr[id];
-    let (mut folded, pexpr) = match node {
-        LutLang::Lut(_) => node.clone().fold_lut_rec(expr, dest),
-        _ => (node.clone(), expr.clone()),
-    };
+    folder: F,
+) -> (Id, bool)
+where
+    F: Fn(&RecExpr<LutLang>, &mut RecExpr<LutLang>, Id) -> (LutLang, bool) + Copy,
+{
+    let (mut folded, mut b) = folder(expr, dest, id);
 
     let preceding = &expr.as_ref()[0..id.into()];
     for (i, o) in preceding.iter().enumerate() {
@@ -809,40 +816,57 @@ fn fold_node_into(
             return if mapping.contains_key(&i.into()) {
                 let new_id = mapping[&i.into()];
                 mapping.insert(id, new_id);
-                new_id
+                (new_id, b)
             } else {
-                fold_node_into(expr, i.into(), dest, mapping)
+                fold_node_into(expr, i.into(), dest, mapping, folder)
             };
-        }
+        };
     }
 
-    let remapped = match folded {
-        LutLang::Lut(ref mut l) => {
-            // If nothing changed, we can just remap the node as normal
-            l[0] = fold_node_into(&pexpr, l[0], dest, mapping);
-            for c in l[1..].iter_mut() {
-                *c = fold_node_into(expr, *c, dest, mapping);
+    // Don't remap the first child because we have an update 'b'
+    let remapped = if b && folded.children().len() > 1 && matches!(folded, LutLang::Lut(_)) {
+        let l = folded.children_mut();
+        for c in l[1..].iter_mut() {
+            if mapping.contains_key(c) {
+                *c = mapping[c];
+            } else {
+                let (u, f) = fold_node_into(expr, *c, dest, mapping, folder);
+                *c = u;
+                b = b || f;
             }
-            folded
         }
-        _ => folded.map_children(|c| fold_node_into(expr, c, dest, mapping)),
+        folded
+    } else {
+        folded.map_children(|c| {
+            if mapping.contains_key(&c) {
+                mapping[&c]
+            } else {
+                let (d, f) = fold_node_into(expr, c, dest, mapping, folder);
+                b = b || f;
+                d
+            }
+        })
     };
 
     let mapped_id = dest.add(remapped);
     mapping.insert(id, mapped_id);
-    mapped_id
+    (mapped_id, b)
 }
 
 /// Simplify expressions by greedily folding LUTs based on invariant programs and constant inputs.
 /// This function should also produce expressions that are not redundant in any nodes.
-pub fn fold_expr_greedily(expr: RecExpr<LutLang>) -> RecExpr<LutLang> {
+pub fn fold_expr_greedily<F>(expr: RecExpr<LutLang>, folder: F) -> (RecExpr<LutLang>, bool)
+where
+    F: Fn(&RecExpr<LutLang>, &mut RecExpr<LutLang>, Id) -> (LutLang, bool) + Copy,
+{
     let mut moved = RecExpr::default();
-
-    fold_node_into(
+    let mut mapping = HashMap::new();
+    let (_id, b) = fold_node_into(
         &expr,
         (expr.as_ref().len() - 1).into(),
         &mut moved,
-        &mut HashMap::new(),
+        &mut mapping,
+        folder,
     );
 
     if cfg!(debug_assertions) {
@@ -850,11 +874,12 @@ pub fn fold_expr_greedily(expr: RecExpr<LutLang>) -> RecExpr<LutLang> {
             panic!("Folding failed: {}", e);
         }
         let info = LutExprInfo::new(&moved);
-        assert!(!info.is_reduntant());
-        assert!(!info.check(&expr).is_not_equiv());
+        if info.check(&expr).is_not_equiv() {
+            panic!("Folding failed: not equivalent {}", moved);
+        }
     }
 
-    moved
+    (moved, b)
 }
 
 /// Canonicalize expressions by naively mapping gates to LUTs.
@@ -900,14 +925,35 @@ pub fn canonicalize_expr(expr: RecExpr<LutLang>) -> RecExpr<LutLang> {
 
     if cfg!(debug_assertions) {
         assert!(verify_expr(&rewritten).is_ok());
-        let info = LutExprInfo::new(&expr);
-        assert!(!info.check(&rewritten).is_not_equiv());
-        // TODO(matth2k): Refactor folding so this is true #38
-        // assert!(!info.is_reduntant());
     }
 
-    let result = fold_expr_greedily(rewritten);
+    let (mut result, mut changed) =
+        fold_expr_greedily(rewritten, |expr, _dest, id| (expr[id].clone(), false));
+
+    while changed {
+        (result, changed) = fold_expr_greedily(result, |expr, _dest, id| (expr[id].clone(), false));
+    }
+    let rewritten = result;
+
     if cfg!(debug_assertions) {
+        assert!(verify_expr(&rewritten).is_ok());
+        let info = LutExprInfo::new(&rewritten);
+        assert!(!info.check(&rewritten).is_not_equiv());
+        assert!(!info.is_reduntant());
+    }
+
+    let (mut result, mut changed) = fold_expr_greedily(rewritten.clone(), |expr, dest, id| {
+        expr[id].clone().fold_lut(expr, dest)
+    });
+
+    while changed {
+        (result, changed) = fold_expr_greedily(result, |expr, dest, id| {
+            expr[id].clone().fold_lut(expr, dest)
+        });
+    }
+
+    if cfg!(debug_assertions) {
+        assert!(verify_expr(&result).is_ok());
         let info = LutExprInfo::new(&result);
         assert!(info.is_canonical());
     }

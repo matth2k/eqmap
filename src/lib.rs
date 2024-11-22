@@ -364,7 +364,9 @@ endmodule"
 
     #[test]
     fn test_verilog_emitter() {
-        let mux: RecExpr<LutLang> = "(MUX s1 (MUX s0 a b) (MUX s0 c d))".parse().unwrap();
+        let mux: RecExpr<LutLang> = "(LUT 202 s1 (LUT 202 s0 a b) (LUT 202 s0 c d))"
+            .parse()
+            .unwrap();
         let module = SVModule::from_expr(mux, "mux_4_1".to_string(), Vec::new());
         assert!(module.is_ok());
         let module = module.unwrap();
@@ -447,6 +449,75 @@ endmodule"
       .D(a),
       .R(1'h0),
       .Q(y)
+  );
+endmodule"
+            .to_string();
+        assert_eq!(module.to_string(), golden);
+    }
+
+    #[test]
+    fn test_emit_gates() {
+        let expr: RecExpr<LutLang> = "(AND a (XOR b (NOR c (NOT (MUX s t false)))))"
+            .parse()
+            .unwrap();
+        let module = SVModule::from_expr(expr, "gate_list".to_string(), Vec::new());
+        assert!(module.is_ok());
+        let module = module.unwrap();
+        let golden = "module gate_list (
+    a,
+    b,
+    c,
+    s,
+    t,
+    y
+);
+  input a;
+  wire a;
+  input b;
+  wire b;
+  input c;
+  wire c;
+  input s;
+  wire s;
+  input t;
+  wire t;
+  output y;
+  wire y;
+  wire tmp6;
+  wire tmp7;
+  wire tmp8;
+  wire tmp9;
+  wire tmp10;
+assign tmp6 = 1'b0;
+  MUX #(
+  ) __1__ (
+      .A(t),
+      .B(tmp6),
+      .S(s),
+      .Y(tmp7)
+  );
+  NOT #(
+  ) __2__ (
+      .A(tmp7),
+      .Y(tmp8)
+  );
+  NOR2 #(
+  ) __3__ (
+      .A(c),
+      .B(tmp8),
+      .Y(tmp9)
+  );
+  XOR2 #(
+  ) __4__ (
+      .A(b),
+      .B(tmp9),
+      .Y(tmp10)
+  );
+  AND2 #(
+  ) __5__ (
+      .A(a),
+      .B(tmp10),
+      .Y(y)
   );
 endmodule"
             .to_string();
