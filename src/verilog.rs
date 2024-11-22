@@ -248,7 +248,8 @@ impl fmt::Display for SVPrimitive {
         if self.prim == "CONST" {
             return write!(
                 f,
-                "assign {} = {};",
+                "{}assign {} = {};",
+                indent,
                 self.outputs.keys().next().unwrap(),
                 self.attributes["VAL"]
             );
@@ -333,6 +334,11 @@ impl SVModule {
             fname: Some(fname),
             ..self
         }
+    }
+
+    /// Get the name of the module
+    pub fn get_name(&self) -> &str {
+        &self.name
     }
 
     /// Append a list of primitive instances to the module
@@ -628,7 +634,7 @@ impl SVModule {
             LutLang::Bus(l) => {
                 for (i, t) in l.iter().rev().enumerate() {
                     let defname = format!("y{}", i);
-                    mapping.insert(*t, outputs.first().unwrap_or(&defname).to_string());
+                    mapping.insert(*t, outputs.get(i).unwrap_or(&defname).to_string());
                     module.outputs.push(SVSignal::new(1, mapping[t].clone()));
                 }
             }
