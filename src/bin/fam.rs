@@ -19,6 +19,10 @@ struct Args {
     /// Path to output verilog file. If not provided, emits to stdout
     output: Option<PathBuf>,
 
+    /// Path to output report JSON file. If not provided, does not emit a report
+    #[arg(long)]
+    rpt: Option<PathBuf>,
+
     /// Return an error if the graph does not reach saturation
     #[arg(short = 'a', long, default_value_t = false)]
     assert_sat: bool,
@@ -47,17 +51,21 @@ struct Args {
     #[arg(short = 'v', long, default_value_t = false)]
     verbose: bool,
 
+    /// Extract based on max circuit depth. This ovverides the k parameter
+    #[arg(long, default_value_t = false)]
+    max_depth: bool,
+
     /// Max fan in size for extracted LUTs
-    #[arg(short = 'k', long, default_value_t = 4)]
+    #[arg(short = 'k', long, default_value_t = 6)]
     k: usize,
 
     /// Timeout in seconds for each expression
     #[arg(short = 't', long,
         default_value_t =
         if cfg!(debug_assertions) {
-            27
+            30
         } else {
-            9
+            10
         })
     ]
     timeout: u64,
@@ -145,13 +153,31 @@ fn main() -> std::io::Result<()> {
 
     let req = if args.verbose { req.with_proof() } else { req };
 
-    eprintln!("INFO: Building initial graph...");
+    let req = if args.rpt.is_some() {
+        req.with_report()
+    } else {
+        req
+    };
+
+    let req = if args.max_depth {
+        req.with_max_depth()
+    } else {
+        req
+    };
+
+    eprintln!("INFO: Compiling Verilog...");
     let expr = f
         .to_single_expr()
         .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
 
     eprintln!("INFO: Building e-graph...");
     let result = process_expression(expr, req, args.no_verify, args.verbose)?;
+
+    if let Some(p) = args.rpt {
+        eprintln!("INFO: Emitting report...");
+        let mut writer = std::fs::File::create(p)?;
+        result.write_report(&mut writer)?;
+    }
 
     eprintln!("INFO: Writing output to Verilog...");
     let output_names: Vec<String> = f.get_outputs().iter().map(|x| x.to_string()).collect();

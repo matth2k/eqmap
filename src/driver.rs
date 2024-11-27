@@ -5,14 +5,15 @@
 */
 use std::time::{Duration, Instant};
 
-use super::cost::KLUTCostFn;
+use super::cost::{DepthCostFn, KLUTCostFn, NegativeCostFn};
 use super::lut::{canonicalize_expr, verify_expr, LutExprInfo, LutLang};
 use egg::{
-    Analysis, BackoffScheduler, Explanation, Extractor, FromOpError, Language, RecExpr,
-    RecExprParseError, Rewrite, Runner,
+    Analysis, BackoffScheduler, CostFunction, Explanation, Extractor, FromOpError, Language,
+    RecExpr, RecExprParseError, Rewrite, Runner,
 };
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
+use serde::Serialize;
 use std::{
     io::{IsTerminal, Read, Write},
     path::PathBuf,
@@ -20,17 +21,28 @@ use std::{
 
 const MAX_CANON_SIZE: usize = 30000;
 
+/// The stats associated with a synthesis run.
+#[derive(Debug, Serialize)]
+pub struct SynthReport {
+    extract_time: f64,
+}
+
 /// The output of a [SynthRequest] run.
 pub struct SynthOutput {
     expr: RecExpr<LutLang>,
     expl: Option<Explanation<LutLang>>,
+    rpt: Option<SynthReport>,
 }
 
 impl SynthOutput {
     /// Create a new [SynthOutput] from a string.
     pub fn new(s: &str) -> Result<Self, RecExprParseError<FromOpError>> {
         let expr: RecExpr<LutLang> = s.parse()?;
-        Ok(Self { expr, expl: None })
+        Ok(Self {
+            expr,
+            expl: None,
+            rpt: None,
+        })
     }
 
     /// Get the expression of the output.
@@ -66,6 +78,14 @@ impl SynthOutput {
     pub fn is_empty(&self) -> bool {
         self.expr.as_ref().is_empty()
     }
+
+    /// Write the report of the output to a writer.
+    pub fn write_report(&self, w: &mut impl Write) -> std::io::Result<()> {
+        if let Some(rpt) = &self.rpt {
+            serde_json::to_writer_pretty(w, rpt)?;
+        }
+        Ok(())
+    }
 }
 
 impl std::fmt::Display for SynthOutput {
@@ -93,6 +113,13 @@ where
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+enum ExtractStrat {
+    MaxDepth,
+    MinDepth,
+    CountLUT(usize),
+}
+
 /// A request to simplify an expression.
 pub struct SynthRequest<A>
 where
@@ -104,8 +131,8 @@ where
     /// The rewrite rules used to simplify the expression.
     rules: Vec<Rewrite<LutLang, A>>,
 
-    /// The greatest fan-in on any LUT in an expression.
-    k: usize,
+    /// The extraction strategy to use.
+    extract_strat: ExtractStrat,
 
     /// If true, do not canonicalize the input expression.
     no_canonicalize: bool,
@@ -122,6 +149,9 @@ where
 
     /// The timelimit, in seconds, given to the search.
     timeout: u64,
+
+    /// Produce a report which records extra stats.
+    produce_rpt: bool,
 
     /// The maximum number of enodes in a searched egraph.
     node_limit: usize,
@@ -141,12 +171,13 @@ impl<A: Analysis<LutLang>> std::default::Default for SynthRequest<A> {
         Self {
             expr: RecExpr::default(),
             rules: Vec::new(),
-            k: 6,
+            extract_strat: ExtractStrat::CountLUT(6),
             no_canonicalize: false,
             assert_sat: false,
             gen_proof: false,
             prog_bar: true,
             timeout: 10,
+            produce_rpt: false,
             node_limit: 20_000,
             iter_limit: 16,
             max_canon_size: MAX_CANON_SIZE,
@@ -160,12 +191,13 @@ impl<A: Analysis<LutLang> + std::clone::Clone> std::clone::Clone for SynthReques
         Self {
             expr: self.expr.clone(),
             rules: self.rules.clone(),
-            k: self.k,
+            extract_strat: self.extract_strat.clone(),
             no_canonicalize: self.no_canonicalize,
             assert_sat: self.assert_sat,
             gen_proof: self.gen_proof,
             prog_bar: self.prog_bar,
             timeout: self.timeout,
+            produce_rpt: self.produce_rpt,
             node_limit: self.node_limit,
             iter_limit: self.iter_limit,
             max_canon_size: self.max_canon_size,
@@ -180,7 +212,26 @@ where
 {
     /// Request with extracting LUTs up to size `k`.
     pub fn with_k(self, k: usize) -> Self {
-        Self { k, ..self }
+        Self {
+            extract_strat: ExtractStrat::CountLUT(k),
+            ..self
+        }
+    }
+
+    /// Extract based on minimum circuit depth.
+    pub fn with_min_depth(self) -> Self {
+        Self {
+            extract_strat: ExtractStrat::MinDepth,
+            ..self
+        }
+    }
+
+    /// Extract based on maximum circuit depth.
+    pub fn with_max_depth(self) -> Self {
+        Self {
+            extract_strat: ExtractStrat::MaxDepth,
+            ..self
+        }
     }
 
     /// Request with at most `iter_limit` rewrite iterations.
@@ -205,6 +256,15 @@ where
     pub fn with_timeout(self, timeout: u64) -> Self {
         Self {
             timeout,
+            result: None,
+            ..self
+        }
+    }
+
+    /// Collect additional stats with e-graph build.
+    pub fn with_report(self) -> Self {
+        Self {
+            produce_rpt: true,
             result: None,
             ..self
         }
@@ -330,10 +390,11 @@ where
         Ok(())
     }
 
-    /// simplify `expr` using egg with at most `k` fan-in on LUTs
-    pub fn simplify_expr(&mut self) -> Result<SynthOutput, String>
+    /// simplify `expr` using egg with cost model `c`
+    pub fn simplify_expr_with<C>(&mut self, c: C) -> Result<SynthOutput, String>
     where
         A: Analysis<LutLang> + std::default::Default,
+        C: CostFunction<LutLang>,
     {
         if self.result.is_none() {
             self.explore()?;
@@ -349,7 +410,7 @@ where
 
         // use an Extractor to pick the best element of the root eclass
         let extraction_start = Instant::now();
-        let extractor = Extractor::new(&runner.egraph, KLUTCostFn::new(self.k));
+        let extractor = Extractor::new(&runner.egraph, c);
         let (_best_cost, best) = extractor.find_best(root);
         let extraction_time = extraction_start.elapsed();
         if self.gen_proof {
@@ -379,7 +440,33 @@ where
                 stop_reason
             );
         }
-        Ok(SynthOutput { expr: best, expl })
+
+        // TODO(matth2k): Produce a wider report and print it to file or stderr
+        let rpt = if self.produce_rpt {
+            Some(SynthReport {
+                extract_time: extraction_time.as_secs_f64(),
+            })
+        } else {
+            None
+        };
+
+        Ok(SynthOutput {
+            expr: best,
+            expl,
+            rpt,
+        })
+    }
+
+    /// Simplify expression with the extraction strategy in request `self`.
+    pub fn simplify_expr(&mut self) -> Result<SynthOutput, String>
+    where
+        A: Analysis<LutLang> + std::default::Default,
+    {
+        match self.extract_strat {
+            ExtractStrat::MinDepth => self.simplify_expr_with(DepthCostFn),
+            ExtractStrat::MaxDepth => self.simplify_expr_with(NegativeCostFn::new(DepthCostFn)),
+            ExtractStrat::CountLUT(k) => self.simplify_expr_with(KLUTCostFn::new(k)),
+        }
     }
 }
 
@@ -487,6 +574,7 @@ where
         return Ok(SynthOutput {
             expr: RecExpr::default(),
             expl: None,
+            rpt: None,
         });
     }
     let expr = line.split("//").next().unwrap();
