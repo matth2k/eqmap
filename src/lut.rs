@@ -3,8 +3,6 @@
   The lut module defines the grammar used to represent LUTs, gates, and principal inputs.
 
 */
-use std::collections::HashMap;
-
 use super::analysis::LutAnalysis;
 use super::check::{equivalent, inconclusive, not_equivalent, Check};
 use super::cost::DepthCostFn;
@@ -15,6 +13,8 @@ use egg::Id;
 use egg::Language;
 use egg::RecExpr;
 use egg::Symbol;
+use serde::Serialize;
+use std::collections::{BTreeMap, HashMap};
 
 define_language! {
     /// Definitions of e-node types. Programs are the only node type that is not a net/signal.
@@ -562,6 +562,16 @@ pub fn eval_lut_const_input(p: &u64, msb: usize, v: bool) -> u64 {
     }
 }
 
+/// Returns a pair of programs (r, q) s.t. msb * r + not(msb) * q = p
+pub fn cofactors_in_msb(p: &u64, k: usize) -> (u64, u64) {
+    assert!(k >= 2);
+    assert!(k <= 6);
+    let mask = (1 << (k - 1)) - 1;
+    let q = p & mask;
+    let r = p >> (1 << (k - 1));
+    (r, q)
+}
+
 /// Swap the truth table for input `pos` and input `pos + 1`, where `pos` is offset from the lsb.
 /// Together these generate the permutation group.
 pub fn swap_pos(bv: &u64, k: usize, pos: usize) -> u64 {
@@ -587,58 +597,15 @@ pub fn swap_pos(bv: &u64, k: usize, pos: usize) -> u64 {
     from_bitvec(&nbv)
 }
 
-/// The size of a given LUT.
-enum LutSize {
-    /// A LUT of given size.
-    Size(usize),
-    /// A LUT of any size. A wildcard in a sense.
-    Any,
-}
-
-/// A cost function counting LUTs of a given size.
-struct NumKLUTsCostFn {
-    size: LutSize,
-}
-
-impl NumKLUTsCostFn {
-    /// Returns a new cost function counting LUTs of `size`.
-    pub fn new(size: LutSize) -> Self {
-        const TOO_LARGE: usize = LutLang::MAX_LUT_SIZE + 1;
-        match size {
-            LutSize::Size(0) | LutSize::Size(TOO_LARGE..) => {
-                panic!("k must be between 1 and {}", LutLang::MAX_LUT_SIZE)
-            }
-            size => Self { size },
-        }
-    }
-}
-
-impl CostFunction<LutLang> for NumKLUTsCostFn {
-    type Cost = u64;
-    fn cost<C>(&mut self, enode: &LutLang, mut costs: C) -> Self::Cost
-    where
-        C: FnMut(Id) -> Self::Cost,
-    {
-        let op_cost = match enode {
-            LutLang::Lut(l) => match self.size {
-                LutSize::Size(k) if l.len() == k + 1 => 1,
-                LutSize::Any => 1,
-                LutSize::Size(_) => 0,
-            },
-            LutLang::Program(_)
-            | LutLang::Const(_)
-            | LutLang::Var(_)
-            | LutLang::DC
-            | LutLang::Nor(_)
-            | LutLang::Mux(_)
-            | LutLang::And(_)
-            | LutLang::Xor(_)
-            | LutLang::Not(_)
-            | LutLang::Bus(_)
-            | LutLang::Reg(_) => 0,
-        };
-        enode.fold(op_cost, |sum, id| sum + costs(id))
-    }
+/// A struct to categorize measurements that characterize the circuit.
+#[derive(Debug, Serialize)]
+pub struct CircuitStats {
+    /// The number of LUTs in the circuit
+    pub lut_count: u64,
+    /// The number of k-LUTs in the circuit
+    pub lut_distribution: BTreeMap<usize, u64>,
+    /// The depth of the circuit
+    pub depth: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -739,18 +706,65 @@ impl<'a> LutExprInfo<'a> {
 
     /// Returns the number of luts in the given expr.
     pub fn get_lut_count(&self) -> u64 {
-        NumKLUTsCostFn::new(LutSize::Any).cost_rec(self.expr)
+        let cse = self.get_cse();
+        cse.as_ref()
+            .iter()
+            .filter(|n| n.get_lut_size().unwrap_or(0) > 0)
+            .count() as u64
     }
 
     /// Returns the number of k-luts in the given expr.
     pub fn get_lut_count_k(&self, k: usize) -> u64 {
-        let size = LutSize::Size(k);
-        NumKLUTsCostFn::new(size).cost_rec(self.expr)
+        let cse = self.get_cse();
+        cse.as_ref()
+            .iter()
+            .filter(|n| n.get_lut_size().unwrap_or(0) == k)
+            .count() as u64
     }
 
     /// Get the depths of the circuit
     pub fn get_circuit_depth(&self) -> u64 {
         DepthCostFn.cost_rec(self.expr) as u64
+    }
+
+    /// Get the (used) inputs of the expression
+    pub fn get_inputs(&self) -> Vec<String> {
+        let root = &self.expr[self.root];
+        root.get_input_set(self.expr)
+    }
+
+    /// Get the number of (used) inputs of the expression
+    pub fn get_num_inputs(&self) -> usize {
+        self.get_inputs().len()
+    }
+
+    /// Get the number of outputs of the expression
+    pub fn get_num_outputs(&self) -> usize {
+        let root = &self.expr[self.root];
+        match root {
+            LutLang::Bus(l) => l.len(),
+            _ => 1,
+        }
+    }
+
+    /// Measure the various stats of the referenced circuit
+    pub fn get_circuit_stats(&self) -> CircuitStats {
+        let mut lut_count: u64 = 0;
+        let mut lut_distribution = BTreeMap::new();
+        for i in 0..LutLang::MAX_LUT_SIZE {
+            let k = i + 1;
+            let count = self.get_lut_count_k(k);
+            if count > 0 {
+                lut_distribution.insert(k, count);
+            }
+            lut_count += count;
+        }
+        let depth = self.get_circuit_depth();
+        CircuitStats {
+            lut_count,
+            lut_distribution,
+            depth,
+        }
     }
 
     /// Returns `true` is the expression has common subexpressions that need to be eliminated

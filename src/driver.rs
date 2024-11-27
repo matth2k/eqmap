@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use super::cost::{DepthCostFn, KLUTCostFn, NegativeCostFn};
-use super::lut::{canonicalize_expr, verify_expr, LutExprInfo, LutLang};
+use super::lut::{canonicalize_expr, verify_expr, CircuitStats, LutExprInfo, LutLang};
 use egg::{
     Analysis, BackoffScheduler, CostFunction, Explanation, Extractor, FromOpError, Language,
     RecExpr, RecExprParseError, Rewrite, Runner,
@@ -21,10 +21,75 @@ use std::{
 
 const MAX_CANON_SIZE: usize = 30000;
 
+/// A struct to compare two results before and after some optimization.
+#[derive(Debug, Serialize)]
+pub struct Comparison<T> {
+    before: T,
+    after: T,
+}
+
 /// The stats associated with a synthesis run.
 #[derive(Debug, Serialize)]
 pub struct SynthReport {
+    name: String,
     extract_time: f64,
+    build_time: f64,
+    input_size: u64,
+    num_inputs: u64,
+    num_outputs: u64,
+    num_classes: u64,
+    num_nodes: u64,
+    num_iterations: u64,
+    saturated: bool,
+    circuit_stats: Comparison<CircuitStats>,
+}
+
+impl SynthReport {
+    /// Create a new [SynthReport] from a synthesized expression.
+    pub fn new<A>(
+        input: &RecExpr<LutLang>,
+        extract_time: f64,
+        runner: &Runner<LutLang, A>,
+        output: &RecExpr<LutLang>,
+    ) -> Self
+    where
+        A: Analysis<LutLang>,
+    {
+        let saturated = if let Some(reason) = &runner.stop_reason {
+            matches!(reason, egg::StopReason::Saturated)
+        } else {
+            false
+        };
+        let rpt = runner.report();
+        let num_classes = rpt.egraph_classes as u64;
+        let num_nodes = rpt.egraph_nodes as u64;
+        let build_time = rpt.total_time;
+        let num_iterations = runner.report().iterations as u64;
+        let input_info = LutExprInfo::new(input);
+        let input_size = input_info.get_cse().as_ref().len() as u64;
+        let num_inputs = input_info.get_num_inputs() as u64;
+        let num_outputs = input_info.get_num_outputs() as u64;
+        let input_circuit_stats = input_info.get_circuit_stats();
+        let output_info = LutExprInfo::new(output);
+        let output_circuit_stats = output_info.get_circuit_stats();
+        let circuit_stats = Comparison {
+            before: input_circuit_stats,
+            after: output_circuit_stats,
+        };
+        Self {
+            name: "top".to_string(),
+            extract_time,
+            build_time,
+            saturated,
+            input_size,
+            num_inputs,
+            num_outputs,
+            num_classes,
+            num_nodes,
+            num_iterations,
+            circuit_stats,
+        }
+    }
 }
 
 /// The output of a [SynthRequest] run.
@@ -85,6 +150,21 @@ impl SynthOutput {
             serde_json::to_writer_pretty(w, rpt)?;
         }
         Ok(())
+    }
+
+    /// Add a name to the synthesis report.
+    pub fn with_name(self, name: &str) -> Self {
+        if self.rpt.is_none() {
+            return self;
+        }
+        Self {
+            expr: self.expr,
+            expl: self.expl,
+            rpt: Some(SynthReport {
+                name: name.to_string(),
+                ..self.rpt.unwrap()
+            }),
+        }
     }
 }
 
@@ -441,11 +521,13 @@ where
             );
         }
 
-        // TODO(matth2k): Produce a wider report and print it to file or stderr
         let rpt = if self.produce_rpt {
-            Some(SynthReport {
-                extract_time: extraction_time.as_secs_f64(),
-            })
+            Some(SynthReport::new(
+                &self.expr,
+                extraction_time.as_secs_f64(),
+                runner,
+                &best,
+            ))
         } else {
             None
         };
