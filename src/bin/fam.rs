@@ -51,9 +51,9 @@ struct Args {
     #[arg(short = 'v', long, default_value_t = false)]
     verbose: bool,
 
-    /// Extract based on max circuit depth. This ovverides the k parameter
+    /// Extract based on min circuit depth instead of using 'k'. Can cause inf loop
     #[arg(long, default_value_t = false)]
-    max_depth: bool,
+    min_depth: bool,
 
     /// Max fan in size for extracted LUTs
     #[arg(short = 'k', long, default_value_t = 6)]
@@ -159,8 +159,8 @@ fn main() -> std::io::Result<()> {
         req
     };
 
-    let req = if args.max_depth {
-        req.with_max_depth()
+    let req = if args.min_depth {
+        req.with_min_depth()
     } else {
         req
     };
