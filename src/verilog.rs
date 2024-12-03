@@ -205,6 +205,21 @@ impl SVPrimitive {
         }
     }
 
+    /// Create a new wire assignment with name `name` driven by `driver`
+    pub fn new_wire(driver: String, signal: String, name: String) -> Self {
+        let mut output: BTreeMap<String, String> = BTreeMap::new();
+        output.insert(signal, "Y".to_string());
+        let mut attributes: BTreeMap<String, String> = BTreeMap::new();
+        attributes.insert("VAL".to_string(), driver);
+        SVPrimitive {
+            prim: "WIRE".to_string(),
+            name,
+            inputs: BTreeMap::new(),
+            outputs: output,
+            attributes,
+        }
+    }
+
     /// Add an input connection
     fn add_input(&mut self, port: String, signal: String) -> Result<(), String> {
         match self.inputs.insert(port.clone(), signal) {
@@ -245,7 +260,7 @@ impl fmt::Display for SVPrimitive {
         let level = 2;
         let indent = " ".repeat(2);
 
-        if self.prim == "CONST" {
+        if SVModule::is_assign_prim(&self.prim) {
             return write!(
                 f,
                 "{}assign {} = {};",
@@ -368,7 +383,7 @@ impl SVModule {
     }
 
     /// Get the driving primitive for a signal
-    pub fn get_driving_primitive(&self, signal: &str) -> Result<&SVPrimitive, String> {
+    pub fn get_driving_primitive<'a>(&'a self, signal: &'a str) -> Result<&'a SVPrimitive, String> {
         match self.driving_module.get(signal) {
             Some(idx) => Ok(&self.instances[*idx]),
             None => Err(format!(
@@ -414,6 +429,10 @@ impl SVModule {
 
     fn is_gate_prim(name: &str) -> bool {
         matches!(name, "AND2" | "NOR2" | "XOR2" | "NOT" | "INV" | "MUX")
+    }
+
+    fn is_assign_prim(name: &str) -> bool {
+        matches!(name, "CONST" | "WIRE")
     }
 
     /// From a parsed verilog ast, create a new module and fill it with its primitives and connections.
@@ -593,6 +612,73 @@ impl SVModule {
                     cur_signals.push(SVSignal::new(1, name));
                 }
                 NodeEvent::Leave(RefNode::NetDeclAssignment(_net_decl)) => (),
+
+                // Handle wire assignment
+                // TODO(mrh259): Refactor this branch of logic and this function in general
+                NodeEvent::Enter(RefNode::NetAssignment(net_assign)) => {
+                    let lhs = unwrap_node!(net_assign, NetLvalue).unwrap();
+                    let lhs_id = unwrap_node!(lhs, SimpleIdentifier).unwrap();
+                    let lhs_name = get_identifier(lhs_id, ast).unwrap();
+                    let rhs = unwrap_node!(net_assign, Expression).unwrap();
+                    let rhs_id =
+                        unwrap_node!(rhs, SimpleIdentifier, BinaryNumber, HexNumber).unwrap();
+                    let assignment = unwrap_node!(net_assign, Symbol).unwrap();
+                    match assignment {
+                        RefNode::Symbol(sym) => {
+                            let loc = sym.nodes.0;
+                            let eq = ast.get_str(&loc).unwrap();
+                            if eq != "=" {
+                                return Err(format!("Expected an assignment operator, got {}", eq));
+                            }
+                        }
+                        _ => {
+                            return Err("Expected an assignment operator".to_string());
+                        }
+                    }
+                    match rhs_id {
+                        RefNode::SimpleIdentifier(_) => {
+                            let rhs_name = get_identifier(rhs_id, ast).unwrap();
+                            cur_insts.push(SVPrimitive::new_wire(
+                                rhs_name.clone(),
+                                lhs_name.clone(),
+                                lhs_name + "_wire_" + &rhs_name,
+                            ));
+                        }
+                        RefNode::BinaryNumber(b) => {
+                            let loc = b.nodes.2.nodes.0;
+                            let val = ast.get_str(&loc).unwrap();
+                            let val = match val {
+                                "0" => false,
+                                "1" => true,
+                                _ => {
+                                    return Err(format!(
+                                        "Expected a 1 bit constant. Found {}",
+                                        val
+                                    ));
+                                }
+                            };
+                            cur_insts.push(SVPrimitive::new_const(
+                                val,
+                                lhs_name.clone(),
+                                lhs_name + "_const_binary",
+                            ));
+                        }
+                        RefNode::HexNumber(b) => {
+                            let loc = b.nodes.2.nodes.0;
+                            let val = ast.get_str(&loc).unwrap();
+                            let val = !matches!(val, "0");
+                            cur_insts.push(SVPrimitive::new_const(
+                                val,
+                                lhs_name.clone(),
+                                lhs_name + "_const_hex",
+                            ));
+                        }
+                        _ => {
+                            return Err("Expected a SimpleIdentifier or PrimaryLiteral".to_string());
+                        }
+                    }
+                }
+                NodeEvent::Leave(RefNode::NetAssignment(_net_assign)) => (),
                 _ => (),
             }
         }
@@ -805,6 +891,14 @@ impl SVModule {
                     let d = primitive.inputs.first_key_value().unwrap().1;
                     let d = self.get_expr(d, expr, map)?;
                     Ok(expr.add(LutLang::Reg([d])))
+                } else if Self::is_assign_prim(primitive.prim.as_str()) {
+                    let val = primitive.attributes.get("VAL").unwrap();
+                    if primitive.prim.as_str() == "CONST" {
+                        let val = val == "1'b1";
+                        Ok(expr.add(LutLang::Const(val)))
+                    } else {
+                        self.get_expr(val.as_str(), expr, map)
+                    }
                 } else {
                     let mut subexpr: Vec<Id> = vec![];
                     let program = primitive.attributes.get("INIT").ok_or(format!(
@@ -838,6 +932,13 @@ impl SVModule {
 
     /// Get a separate [LutLang] expression for every output in the module
     pub fn get_exprs(&self) -> Result<Vec<(String, RecExpr<LutLang>)>, String> {
+        if let Err(s) = self.contains_cycles() {
+            return Err(format!(
+                "Cannot convert module with feedback on signal {}",
+                s
+            ));
+        }
+
         let mut exprs = vec![];
         for output in self.outputs.iter() {
             let mut expr = RecExpr::default();
@@ -849,6 +950,13 @@ impl SVModule {
 
     /// Get a single [LutLang] expression for the module as a bus
     pub fn to_single_expr(&self) -> Result<RecExpr<LutLang>, String> {
+        if let Err(s) = self.contains_cycles() {
+            return Err(format!(
+                "Cannot convert module with feedback on signal {}",
+                s
+            ));
+        }
+
         let mut expr: RecExpr<LutLang> = RecExpr::default();
         let mut map = HashMap::new();
         let mut outputs: Vec<Id> = vec![];
@@ -864,6 +972,13 @@ impl SVModule {
 
     /// Convert the module to a [LutLang] expression
     pub fn to_expr(&self) -> Result<RecExpr<LutLang>, String> {
+        if let Err(s) = self.contains_cycles() {
+            return Err(format!(
+                "Cannot convert module with feedback on signal {}",
+                s
+            ));
+        }
+
         if self.outputs.len() != 1 {
             return Err(format!(
                 "{}: Expected exactly one output in module {}.",
@@ -878,6 +993,38 @@ impl SVModule {
     /// Get the name of the outputs of the module
     pub fn get_outputs(&self) -> Vec<&str> {
         self.outputs.iter().map(|x| x.get_name()).collect()
+    }
+
+    fn contains_cycles_rec<'a>(
+        &'a self,
+        signal: &'a str,
+        walk: &mut HashSet<&'a str>,
+    ) -> Result<(), &'a str> {
+        if walk.contains(signal) {
+            return Err(signal);
+        }
+        walk.insert(signal);
+        let driving = self.get_driving_primitive(signal);
+        if driving.is_err() {
+            walk.remove(signal);
+            return Ok(());
+        }
+        let driving = driving.unwrap();
+        for (_, driver) in driving.inputs.iter() {
+            self.contains_cycles_rec(driver, walk)?
+        }
+        walk.remove(signal);
+        Ok(())
+    }
+
+    /// We cannot lower verilog with cycles in it to LutLang expressions.
+    /// This function returns [Ok] when there are no cycles in the module
+    pub fn contains_cycles<'a>(&'a self) -> Result<(), &'a str> {
+        for output in self.outputs.iter() {
+            let mut stack: HashSet<&'a str> = HashSet::new();
+            self.contains_cycles_rec(output.get_name(), &mut stack)?
+        }
+        Ok(())
     }
 }
 
