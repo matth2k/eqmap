@@ -32,6 +32,8 @@ define_language! {
         "LUT" = Lut(Box<[Id]>), // Program is first
         "BUS" = Bus(Box<[Id]>), // a bus of nodes
         "REG" = Reg([Id; 1]),
+        "ARG" = Arg([Id; 1]),
+        "CYCLE" = Cycle([Id; 1]),
     }
 }
 
@@ -58,7 +60,8 @@ impl LutLang {
                 }
             }
             LutLang::Var(f) => match f.as_str() {
-                "NOR" | "LUT" | "MUX" | "AND" | "XOR" | "NOT" | "BUS" | "DC" | "x" | "REG" => Err(
+                "NOR" | "LUT" | "MUX" | "AND" | "XOR" | "NOT" | "BUS" | "DC" | "x" | "REG"
+                | "CYCLE" | "ARG" => Err(
                     "Variable name is already reserved. Check for missing parentheses.".to_string(),
                 ),
                 _ => Ok(()),
@@ -67,13 +70,11 @@ impl LutLang {
         }
     }
 
-    /// Recursively verify the grammar of a [LutLang] expression `expr` rooted at `self`
-    pub fn verify_rec(&self, expr: &RecExpr<Self>) -> Result<(), String> {
+    fn verify_rec_cfg(&self, expr: &RecExpr<Self>, depth: u64) -> Result<(), String> {
         self.verify()?;
-        for c in self.children() {
-            let t = &expr[*c];
-            t.verify_rec(expr)?;
-            if let LutLang::Lut(l) = self {
+
+        match self {
+            Self::Lut(l) => {
                 if let LutLang::Program(p) = expr[l[0]] {
                     let k = l.len() - 1;
                     if k < Self::MAX_LUT_SIZE && p >= (1 << (1 << k)) {
@@ -82,7 +83,8 @@ impl LutLang {
                 } else {
                     return Err("LUT must have a program".to_string());
                 }
-            } else if let LutLang::Bus(l) = self {
+            }
+            Self::Bus(l) => {
                 for id in l.iter() {
                     if let LutLang::Program(_) = expr[*id] {
                         return Err("Bus cannot contain a program".to_string());
@@ -91,8 +93,34 @@ impl LutLang {
                     }
                 }
             }
+            Self::Arg([id]) => match expr[*id] {
+                Self::Program(index) => {
+                    if index >= depth {
+                        return Err("Argument index out of bounds".to_string());
+                    }
+                }
+                _ => return Err("Arg must contain an index (u64)".to_string()),
+            },
+            _ => (),
         }
+
+        let depth = if matches!(self, LutLang::Cycle(_)) {
+            depth + 1
+        } else {
+            depth
+        };
+
+        for c in self.children() {
+            let t = &expr[*c];
+            t.verify_rec_cfg(expr, depth)?;
+        }
+
         Ok(())
+    }
+
+    /// Recursively verify the grammar of a [LutLang] expression `expr` rooted at `self`
+    pub fn verify_rec(&self, expr: &RecExpr<Self>) -> Result<(), String> {
+        self.verify_rec_cfg(expr, 0)
     }
 
     /// Extract the program from a [LutLang::Lut] contained in expression `expr`
@@ -258,6 +286,8 @@ impl LutLang {
                 Ok(bv)
             }
             LutLang::Reg(_) => Err("REG is not combinational logic".to_string()),
+            LutLang::Arg(_) => Err("ARG is not combinational logic".to_string()),
+            LutLang::Cycle([a]) => expr[*a].eval_rec(inputs, expr),
         }
     }
 
@@ -285,7 +315,9 @@ impl LutLang {
             | (LutLang::Not(_), LutLang::Not(_))
             | (LutLang::Mux(_), LutLang::Mux(_))
             | (LutLang::Bus(_), LutLang::Bus(_))
-            | (LutLang::Reg(_), LutLang::Reg(_)) => {
+            | (LutLang::Reg(_), LutLang::Reg(_))
+            | (LutLang::Arg(_), LutLang::Arg(_))
+            | (LutLang::Cycle(_), LutLang::Cycle(_)) => {
                 for (a, b) in self.children().iter().zip(other.children()) {
                     if !expr[*a].deep_equals(&expr[*b], expr) {
                         return false;

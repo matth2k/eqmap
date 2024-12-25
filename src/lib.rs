@@ -669,6 +669,53 @@ endmodule"
     }
 
     #[test]
+    fn test_cycle() {
+        let simple_cycle_expr: RecExpr<LutLang> = "(CYCLE (REG (AND a (ARG 0))))".parse().unwrap();
+        assert!(LutLang::func_equiv(
+            &simple_cycle_expr,
+            &"(CYCLE (REG (AND a (ARG 0))))".parse().unwrap()
+        )
+        .is_equiv());
+        let complex_cycle_expr: RecExpr<LutLang> =
+            "(CYCLE (XOR (ARG 0) (CYCLE (REG (AND a (ARG 1))))))"
+                .parse()
+                .unwrap();
+        assert!(LutLang::func_equiv(
+            &complex_cycle_expr,
+            &"(CYCLE (XOR (ARG 0) (CYCLE (REG (AND a (ARG 1))))))"
+                .parse()
+                .unwrap()
+        )
+        .is_equiv());
+        let eval_cycle_expr: RecExpr<LutLang> = "(CYCLE (REG in))".parse().unwrap();
+        assert!(
+            LutLang::func_equiv(&eval_cycle_expr, &"(REG in)".parse().unwrap()).is_inconclusive()
+        );
+        assert!(LutLang::func_equiv(
+            &simple_cycle_expr,
+            &"(CYCLE (REG (AND (XOR (AND a 1) (ARG 0)) (ARG 0))))"
+                .parse()
+                .unwrap()
+        )
+        .is_inconclusive());
+    }
+
+    #[test]
+    fn test_cycle_verify() {
+        let bad_cycle: RecExpr<LutLang> = "(CYCLE (REG (AND a (ARG myarg))))".parse().unwrap();
+        let root = bad_cycle.as_ref().last().unwrap();
+        assert!(root.verify_rec(&bad_cycle).is_err());
+
+        let good_cycle: RecExpr<LutLang> = "(CYCLE (REG (AND a (ARG 0))))".parse().unwrap();
+        let root = good_cycle.as_ref().last().unwrap();
+        assert!(root.verify_rec(&good_cycle).is_ok());
+
+        let bad_cycle: RecExpr<LutLang> = "(CYCLE (REG (AND a (ARG 1))))".parse().unwrap();
+        let root = bad_cycle.as_ref().last().unwrap();
+        assert!(root.verify_rec(&bad_cycle).is_err());
+    }
+
+    #[test]
     fn test_interface_count() {
         let expr: RecExpr<LutLang> = "(MUX s a b)".parse().unwrap();
         let info = LutExprInfo::new(&expr);
