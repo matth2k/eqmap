@@ -1,4 +1,6 @@
 use clap::Parser;
+#[cfg(feature = "dyn_decomp")]
+use lut_synth::rewrite::dyn_decompositions;
 use lut_synth::{
     driver::{process_expression, SynthRequest},
     rewrite::{all_rules_minus_dyn_decomp, register_retiming},
@@ -40,6 +42,7 @@ struct Args {
     command: Option<String>,
 
     /// Find new decompositions at runtime
+    #[cfg(feature = "dyn_decomp")]
     #[arg(short = 'd', long, default_value_t = false)]
     decomp: bool,
 
@@ -117,8 +120,10 @@ fn main() -> std::io::Result<()> {
     );
 
     let mut rules = all_rules_minus_dyn_decomp();
+
+    #[cfg(feature = "dyn_decomp")]
     if args.decomp {
-        todo!("Dynamic decomposition is not implemented yet");
+        rules.append(&mut dyn_decompositions());
     }
 
     if !args.no_retime {
@@ -127,6 +132,7 @@ fn main() -> std::io::Result<()> {
 
     if args.verbose {
         eprintln!("INFO: Running with {} rewrite rules", rules.len());
+        #[cfg(feature = "dyn_decomp")]
         eprintln!(
             "INFO: Dynamic Decomposition {}",
             if args.decomp { "ON" } else { "OFF" }

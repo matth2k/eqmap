@@ -17,15 +17,25 @@ use std::collections::{HashMap, HashSet};
 
 /// Returns a list of structural mappings of logic functions to LUTs.
 /// For example, MUXes are mapped to 3-LUTs and AND gates to 2-LUTs.
-pub fn struct_lut_map<A>() -> Vec<Rewrite<lut::LutLang, A>>
+pub fn struct_lut_map<A>(bidirectional: bool) -> Vec<Rewrite<lut::LutLang, A>>
 where
     A: Analysis<lut::LutLang> + std::default::Default,
 {
     let mut rules: Vec<Rewrite<lut::LutLang, A>> = Vec::new();
     // Logic element conversions
-    rules.push(rewrite!("nor2-conversion"; "(NOR ?a ?b)" => "(LUT 1 ?a ?b)"));
-    rules.push(rewrite!("and2-conversion"; "(AND ?a ?b)" => "(LUT 8 ?a ?b)"));
-    rules.push(rewrite!("xor2-conversion"; "(XOR ?a ?b)" => "(LUT 6 ?a ?b)"));
+    if bidirectional {
+        rules.append(&mut rewrite!("nor2-conversion"; "(NOR ?a ?b)" <=> "(LUT 1 ?a ?b)"));
+        rules.append(&mut rewrite!("and2-conversion"; "(AND ?a ?b)" <=> "(LUT 8 ?a ?b)"));
+        rules.append(&mut rewrite!("xor2-conversion"; "(XOR ?a ?b)" <=> "(LUT 6 ?a ?b)"));
+        rules.push(
+            rewrite!("mux-expand"; "(LUT 202 ?s ?a ?b)" => "(LUT 14 (LUT 8 ?s ?a) (LUT 2 ?s ?b))"),
+        );
+    } else {
+        rules.push(rewrite!("nor2-conversion"; "(NOR ?a ?b)" => "(LUT 1 ?a ?b)"));
+        rules.push(rewrite!("and2-conversion"; "(AND ?a ?b)" => "(LUT 8 ?a ?b)"));
+        rules.push(rewrite!("xor2-conversion"; "(XOR ?a ?b)" => "(LUT 6 ?a ?b)"));
+    }
+
     rules.append(&mut rewrite!("inverter-conversion"; "(NOT ?a)" <=> "(LUT 1 ?a)"));
     // s? a : b
     rules.append(&mut rewrite!("mux2-1-conversion"; "(MUX ?s ?a ?b)" <=> "(LUT 202 ?s ?a ?b)"));
@@ -189,6 +199,17 @@ pub fn known_decompositions() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     rules
 }
 
+/// Find dynamic decompositions of LUTs at runtime
+#[cfg(feature = "dyn_decomp")]
+pub fn dyn_decompositions() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
+    let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
+    rules.push(rewrite!("lut3-shannon-expand"; "(LUT ?p ?a ?b ?c)" => {decomp::ShannonExpand::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap()])}));
+    rules.push(rewrite!("lut4-shannon-expand"; "(LUT ?p ?a ?b ?c ?d)" => {decomp::ShannonExpand::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap()])}));
+    rules.push(rewrite!("lut5-shannon-expand"; "(LUT ?p ?a ?b ?c ?d ?e)" => {decomp::ShannonExpand::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?e".parse().unwrap()])}));
+    rules.push(rewrite!("lut6-shannon-expand"; "(LUT ?p ?a ?b ?c ?d ?e ?f)" => {decomp::ShannonExpand::new("?p".parse().unwrap(), vec!["?a".parse().unwrap(), "?b".parse().unwrap(), "?c".parse().unwrap(), "?d".parse().unwrap(), "?e".parse().unwrap(), "?f".parse().unwrap()])}));
+    rules
+}
+
 /// Canonicalizes LUTs with redundant inputs
 pub fn redundant_inputs() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
@@ -207,7 +228,7 @@ pub fn all_rules_minus_dyn_decomp() -> Vec<Rewrite<lut::LutLang, LutAnalysis>> {
     let mut rules: Vec<Rewrite<lut::LutLang, LutAnalysis>> = Vec::new();
 
     // Structural mappings of gates to LUTs
-    rules.append(&mut struct_lut_map());
+    rules.append(&mut struct_lut_map(false));
 
     // Evaluate constant programs
     rules.append(&mut constant_luts());
@@ -650,5 +671,241 @@ impl Applier<lut::LutLang, LutAnalysis> for FuseCut {
                 }
             }
         }
+    }
+}
+
+/// A module dedicated to dynamically finding decompositions of LUTs
+#[cfg(feature = "dyn_decomp")]
+pub mod decomp {
+
+    use crate::{
+        analysis::{self, LutAnalysis},
+        lut::{self, from_bitvec, to_bitvec, LutLang},
+    };
+    use bitvec::prelude::*;
+    use egg::{Analysis, Applier, Id, Var};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    /// A data type for folding LUTs
+    enum AbstractNode {
+        /// A LUT node with [u64] configuration
+        Lut(u64, Vec<Id>),
+        /// A constant true/false node
+        Const(bool),
+        /// An indirect node
+        Node(Id),
+    }
+
+    impl AbstractNode {
+        /// Returns the number of children of the node
+        pub fn num_inputs(&self) -> usize {
+            match self {
+                AbstractNode::Lut(_, inputs) => inputs.len(),
+                AbstractNode::Node(_) => 1,
+                _ => 0,
+            }
+        }
+
+        /// Put this [AbstractNode] into the `egraph`
+        pub fn construct<A>(self, egraph: &mut egg::EGraph<LutLang, A>) -> Id
+        where
+            A: Analysis<LutLang>,
+        {
+            match self {
+                AbstractNode::Lut(program, mut inputs) => {
+                    let pid = egraph.add(LutLang::Program(program));
+                    let mut c = vec![pid];
+                    c.append(&mut inputs);
+                    egraph.add(LutLang::Lut(c.into()))
+                }
+                AbstractNode::Const(b) => egraph.add(LutLang::Const(b)),
+                AbstractNode::Node(id) => id,
+            }
+        }
+
+        /// Given a program `p` and a set of inputs `inputs`, this function returns a simplification of the LUT
+        fn fold_lut(self) -> Self {
+            if let Self::Lut(program, inputs) = self {
+                let k = inputs.len();
+
+                if k <= 1 {
+                    match program & 3 {
+                        0 => return Self::Const(false),
+                        3 => return Self::Const(true),
+                        2 => return Self::Node(inputs[0]),
+                        1 => return Self::Lut(1, inputs),
+                        _ => unreachable!(),
+                    }
+                }
+
+                // Evaluate invariant inputs
+                for pos in 0..k {
+                    let pbv = to_bitvec(program, 1 << k).unwrap();
+                    let mut nbv: BitVec<usize, Lsb0> = BitVec::with_capacity(1 << (k - 1));
+                    for i in 0..(1 << (k - 1)) {
+                        let mut index_lo = to_bitvec(i, k - 1).unwrap();
+                        let mut index_hi = index_lo.clone();
+                        index_lo.insert(k - pos - 1, false);
+                        index_hi.insert(k - pos - 1, true);
+                        let index_lo = from_bitvec(&index_lo) as usize;
+                        let index_hi = from_bitvec(&index_hi) as usize;
+                        if pbv[index_lo] != pbv[index_hi] {
+                            break;
+                        }
+                        nbv.push(pbv[index_lo]);
+                    }
+                    if nbv.len() == 1 << (k - 1) {
+                        let np = from_bitvec(&nbv);
+                        let mut c = inputs;
+                        c.remove(pos);
+                        return Self::Lut(np, c);
+                    } else {
+                        continue;
+                    }
+                }
+                Self::Lut(program, inputs)
+            } else {
+                self
+            }
+        }
+    }
+
+    /// Given a program `p` and a set of inputs `inputs`, this function returns a simplification of the LUT
+    fn fold_lut_greedily(program: u64, inputs: Vec<Id>) -> AbstractNode {
+        let init = AbstractNode::Lut(program, inputs);
+        let mut current = init;
+        loop {
+            let next = current.clone().fold_lut();
+            if next == current {
+                break;
+            }
+            current = next;
+        }
+        current
+    }
+    /// A rewrite applier for expanding a LUT along its two cofactors in the most-significant operand.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ShannonExpand {
+        /// The program
+        program: Var,
+        /// The redundant inputs must be at the last two positions
+        vars: Vec<Var>,
+    }
+
+    impl ShannonExpand {
+        /// Create an applier that combines duplicated inputs to a LUT.
+        /// The last two elements in `vars` must be the same.
+        pub fn new(program: Var, vars: Vec<Var>) -> Self {
+            Self { program, vars }
+        }
+
+        fn cuts_overlap(
+            egraph: &mut egg::EGraph<lut::LutLang, analysis::LutAnalysis>,
+            children: &[egg::Id],
+        ) -> bool {
+            for (i, a) in children.iter().enumerate() {
+                let ac = egraph[*a].data.get_cut();
+                // Don't want inverters to be elaborated on
+                if ac.len() == 1 && !egraph[*a].data.is_an_input() {
+                    return true;
+                }
+                for b in children.iter().skip(i + 1) {
+                    if a == b {
+                        return true;
+                    }
+                    let bc = egraph[*b].data.get_cut();
+                    if ac.intersection(bc).count() > 0 {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+    }
+
+    impl Applier<LutLang, LutAnalysis> for ShannonExpand {
+        fn apply_one(
+            &self,
+            egraph: &mut egg::EGraph<LutLang, LutAnalysis>,
+            eclass: egg::Id,
+            subst: &egg::Subst,
+            searcher_ast: Option<&egg::PatternAst<LutLang>>,
+            rule_name: egg::Symbol,
+        ) -> Vec<egg::Id> {
+            let operands = self
+                .vars
+                .iter()
+                .map(|v| subst[*v])
+                .collect::<Vec<egg::Id>>();
+            let program = egraph[subst[self.program]]
+                .data
+                .get_program()
+                .expect("Expected program");
+            let k = operands.len();
+            // Only going to decompose in three variables or more
+            if k <= 2 || program == 0 || program.count_ones() == (1 << k) {
+                return vec![];
+            }
+            if k == 3 && program == 202 {
+                return vec![];
+            }
+            // Can only decompose in one variable order or else the e-graph will explode
+            if !operands.windows(2).all(|w| w[0] <= w[1]) {
+                return vec![];
+            }
+            // No overlapping cuts of children
+            if operands.contains(&eclass) {
+                return vec![];
+            }
+            if Self::cuts_overlap(egraph, &operands) {
+                return vec![];
+            }
+
+            let (c1, c0) = lut::cofactors_in_msb(&program, k);
+            let c1 = fold_lut_greedily(c1, operands[1..].to_vec());
+            let c0 = fold_lut_greedily(c0, operands[1..].to_vec());
+
+            // Don't want to decompose when one of the cofactors is constant
+            // TODO: Pre-fold this into a different form
+            if c0.num_inputs() == 0 || c1.num_inputs() == 0 {
+                return vec![];
+            }
+
+            if searcher_ast.is_some() {
+                todo!("Implement pattern update for ShannonExpand");
+            }
+
+            let c1_id = c1.construct(egraph);
+            let c0_id = c0.construct(egraph);
+            let mux_p = egraph.add(lut::LutLang::Program(202));
+            let new_node = lut::LutLang::Lut(vec![mux_p, operands[0], c1_id, c0_id].into());
+            let new_lut = egraph.add(new_node);
+            if egraph.union_trusted(eclass, new_lut, rule_name) {
+                vec![new_lut]
+            } else {
+                vec![]
+            }
+        }
+    }
+
+    #[test]
+    fn test_decomp() {
+        let expr: egg::RecExpr<lut::LutLang> = "(LUT 61642 s1 s0 c d)".parse().unwrap();
+        let mut rules = super::all_rules_minus_dyn_decomp();
+        rules.append(&mut super::dyn_decompositions());
+
+        use crate::driver::SynthRequest;
+        let mut req = SynthRequest::default()
+            .with_expr(expr)
+            .with_rules(rules)
+            .with_k(3)
+            .with_asserts()
+            .without_progress_bar()
+            .with_timeout(20)
+            .with_node_limit(20_000)
+            .with_iter_limit(30);
+
+        let ans = req.simplify_expr().unwrap().get_expr().to_string();
+        assert_eq!(ans, "(LUT 202 s1 s0 (LUT 202 s0 c d))");
     }
 }
