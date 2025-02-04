@@ -35,7 +35,7 @@ First, install all the prerequisites for building. For basic functionally, you n
 
 `cargo build`
 
-`cargo run --release -- tests/verilog/mux_reg.v # Run the synthesizer on a very simple 4:1 pipelined mux`
+`cargo run --release -- tests/verilog/mux_reg.v # Sanity check`
 
 You can also try to synthesize your own verilog `my_file.v`:
 
@@ -52,31 +52,30 @@ Tech Re-Mapping with E-Graphs
 Usage: fam [OPTIONS] [INPUT] [OUTPUT]
 
 Arguments:
-  [INPUT]   Path to input verilog file. If not provided, reads from stdin
-  [OUTPUT]  Path to output verilog file. If not provided, emits to stdout
+  [INPUT]   If provided, verilog is read from the file over stdin
+  [OUTPUT]  If provided, verilog is emitted to the file over stdout
 
 Options:
-      --report <REPORT>          Path to output report JSON file. 
-  -a, --assert-sat               Return an error if the graph does not reach saturation
-  -f, --no-verify                Do not verify functionality of the output
-  -c, --no-canonicalize          Do not canonicalize the input into LUTs
-      --command <COMMAND>        Opt a specific LUT expr instead of from file
-  -d, --decomp                   Find new decompositions at runtime
-      --disassemble              Disassemble the LUTs into their constituent gates
-  -r, --no-retime                Do not use register retiming
-  -v, --verbose                  This generates a proof and runs much slower
-      --min-depth                Extract based on min circuit depth instead of using 'k'.
-  -k, --k <K>                    Max fan in size for extracted LUTs [default: 6]
-  -t, --timeout <TIMEOUT>        Timeout in seconds for each expression [default: 10]
-  -s, --node-limit <NODE_LIMIT>  Maximum number of nodes in graph [default: 48000]
-  -n, --iter-limit <ITER_LIMIT>  Maximum number of rewrite iterations [default: 32]
-  -h, --help                     Print help
-  -V, --version                  Print version
+      --report <REPORT>            If provided, output a JSON file to the path with results
+  -a, --assert-sat                 Return an error if the graph does not reach saturation
+  -f, --no-verify                  Do not verify functionality of the output
+  -c, --no-canonicalize            Do not canonicalize the input into LUTs
+  -d, --decomp                     Find new decompositions at runtime
+      --disassemble <DISASSEMBLE>  Comma separated list of cell types to decompose into
+  -r, --no-retime                  Do not use register retiming
+  -v, --verbose                    Print explanations  (generates a proof and runs slower)
+      --min-depth                  Extract for min circuit depth
+  -k, --k <K>                      Max fan in size for extracted LUTs [default: 6]
+  -t, --timeout <TIMEOUT>          Timeout in seconds for each expression [default: 10]
+  -s, --node-limit <NODE_LIMIT>    Maximum number of nodes in graph [default: 48000]
+  -n, --iter-limit <ITER_LIMIT>    Maximum number of rewrite iterations [default: 32]
+  -h, --help                       Print help
+  -V, --version                    Print version
 ```
 
 ### Features
 
-The project has two conditionally compiled features:
+The project has three conditionally compiled features:
 
 1. `egraph_fold` (should really not be used)
 2. `exactness` (used for exact synthesis, requires cbc)
@@ -101,10 +100,14 @@ Here is a rough outline of the type system defined by `LutLang`:
 It is important to note that there is an implicit coversion from BUS types to Node types. The least significant bit is taken.
 REG expressions trivially result in inconclusive. Sequential logic isn't fully supported yet.
 
-`<Node> ::= <Const> | x | <Input> | NOR <Node> <Node> | MUX <Node> <Node> <Node> | LUT <Program> <Node> ... <Node> | REG <Node> | ARG <u64> | CYCLE <Node>`
+```
+<Node> ::= <Const> | x | <Input> | NOR <Node> <Node> | MUX <Node> <Node> <Node>
+            | LUT <Program> <Node> ... <Node> | REG <Node> | ARG <u64> | CYCLE <Node>
 
-`<Const> ::= false | true // Base type is a bool`
 
-`<Input> ::= <String> // Any string is parsed as an input variable`
+<Const> ::= false | true // Base type is a bool
 
-`<Program> ::= <u64> // Can store a program for up to 6 bits`
+<Input> ::= <String> // Any string is parsed as an input variable
+
+<Program> ::= <u64> // Can store a program for up to 6 bits
+```
