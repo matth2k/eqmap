@@ -28,7 +28,21 @@ where
         rules.append(&mut rewrite!("and2-conversion"; "(AND ?a ?b)" <=> "(LUT 8 ?a ?b)"));
         rules.append(&mut rewrite!("xor2-conversion"; "(XOR ?a ?b)" <=> "(LUT 6 ?a ?b)"));
         rules.push(rewrite!("or2-conversion"; "(LUT 14 ?a ?b)" => "(NOT (NOR ?a ?b))"));
-        rules.push(rewrite!("and-one-inv-conversion"; "(LUT 2 ?a ?b)" => "(AND (NOT ?a) ?b)"))
+        rules.push(rewrite!("and-one-inv-conversion"; "(LUT 2 ?a ?b)" => "(AND (NOT ?a) ?b)"));
+        rules.append(&mut rewrite!("xor2-nor-nand"; "(XOR ?a ?b)" <=> "(NOT (NOR (AND (NOT ?a) ?b) (AND (NOT ?b) ?a)))"));
+        rules.append(
+            &mut rewrite!("and-distributivity"; "(AND ?a (NOT (NOR ?b ?c)))" <=> "(NOT (NOR (AND ?a ?b) (AND ?a ?c)))"),
+        );
+        rules.append(
+            &mut rewrite!("or-distributivity"; "(NOT (NOR ?a (AND ?b ?c)))" <=> "(AND (NOT (NOR ?a ?b)) (NOT (NOR ?a ?c)))"),
+        );
+        rules.append(
+            &mut rewrite!("and-associativity"; "(AND (AND ?a ?b) ?c)" <=> "(AND ?a (AND ?b ?c))"),
+        );
+        rules.append(
+            &mut rewrite!("or-associativity"; "(NOT (NOR ?a (NOT (NOR ?b ?c))))" <=> "(NOT (NOR (NOT (NOR ?a ?b)) ?c))"),
+        );
+        rules.append(&mut rewrite!("demorgan"; "(NOR ?a ?b)" <=> "(AND (NOT ?a) (NOT ?b))"));
     } else {
         rules.push(rewrite!("nor2-conversion"; "(NOR ?a ?b)" => "(LUT 1 ?a ?b)"));
         rules.push(rewrite!("and2-conversion"; "(AND ?a ?b)" => "(LUT 8 ?a ?b)"));
