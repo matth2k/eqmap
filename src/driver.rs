@@ -11,6 +11,8 @@ use egg::{
 };
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -442,7 +444,7 @@ where
     }
 
     /// Build request limited by `timeout` seconds.
-    pub fn with_timeout(self, timeout: u64) -> Self {
+    pub fn time_limited(self, timeout: u64) -> Self {
         Self {
             build_strat: BuildStrat::TimeLimited(timeout),
             result: None,
@@ -596,6 +598,34 @@ where
             runner
         };
 
+        // Make a time bar
+        let time_bar = match (self.prog_bar, self.build_strat.clone()) {
+            (true, BuildStrat::TimeLimited(t)) | (true, BuildStrat::Custom(t, _, _)) => {
+                // This is a Copilot special right here...
+                let stop_signal = Arc::new(AtomicBool::new(false));
+                let stop_signal_clone = Arc::clone(&stop_signal);
+                let b = Arc::new(mp.add(ProgressBar::new(t * 2)));
+                b.set_style(
+                    ProgressStyle::with_template("[{bar:60.green}] {spinner:.green} {elapsed}")
+                        .unwrap(),
+                );
+                b.tick();
+
+                let pb_clone = Arc::clone(&b);
+                std::thread::spawn(move || {
+                    for _ in 0..(t * 2 - 1) {
+                        std::thread::sleep(Duration::from_millis(500));
+                        if stop_signal_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                        pb_clone.inc(1);
+                    }
+                });
+                Some((stop_signal, b))
+            }
+            _ => None,
+        };
+
         if self.expr.as_ref().len() > self.max_canon_size {
             eprintln!(
                 "WARNING: Input is too large to canonicalize ({} nodes)",
@@ -620,6 +650,10 @@ where
         self.result = Some(runner.with_expr(&self.expr).run(&self.rules));
 
         // Clear the progress bar
+        if let Some(t) = time_bar {
+            t.0.store(true, Ordering::Relaxed);
+            t.1.finish_and_clear();
+        }
         mp.clear().unwrap();
 
         if self.gen_proof {
