@@ -21,9 +21,7 @@ fn get_main_runner(s: &str) -> Result<SynthRequest<LutAnalysis>, RecExprParseErr
         .with_k(4)
         .with_asserts()
         .without_progress_bar()
-        .with_timeout(20)
-        .with_node_limit(20_000)
-        .with_iter_limit(30))
+        .with_joint_limits(20, 20_000, 30))
 }
 
 #[allow(dead_code)]
@@ -40,7 +38,7 @@ fn simplify_w_proof(s: &str) -> String {
     req.simplify_expr().unwrap().get_expr().to_string()
 }
 
-/// LUT Network Synthesis with E-Graphs
+/// Technology Mapping Optimization with E-Graphs
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -51,7 +49,7 @@ struct Args {
     #[arg(short = 'a', long, default_value_t = false)]
     assert_sat: bool,
 
-    /// Don't verify functionality of the output
+    /// Do not verify the functionality of the output
     #[arg(short = 'f', long, default_value_t = false)]
     no_verify: bool,
 
@@ -86,11 +84,11 @@ struct Args {
     #[arg(short = 'v', long, default_value_t = false)]
     verbose: bool,
 
-    /// Extract for min circuit depth
+    /// Extract for minimum circuit depth
     #[arg(long, default_value_t = false)]
     min_depth: bool,
 
-    /// Max fan in size for LUTs
+    /// Max fan in size allowed for extracted LUTs
     #[arg(short = 'k', long, default_value_t = 4)]
     k: usize,
 
@@ -98,7 +96,7 @@ struct Args {
     #[arg(short = 'w', long, default_value_t = 1)]
     reg_weight: u64,
 
-    /// Timeout in seconds for each expression
+    /// Build/extraction timeout in seconds
     #[arg(short = 't', long,
         default_value_t =
         if cfg!(debug_assertions) {
@@ -155,9 +153,7 @@ fn main() -> std::io::Result<()> {
     let req = SynthRequest::default()
         .with_rules(rules)
         .with_k(args.k)
-        .with_timeout(args.timeout)
-        .with_node_limit(args.node_limit)
-        .with_iter_limit(args.iter_limit);
+        .with_joint_limits(args.timeout, args.node_limit, args.iter_limit);
 
     let req = if args.assert_sat {
         req.with_asserts()
@@ -190,7 +186,7 @@ fn main() -> std::io::Result<()> {
 
     #[cfg(feature = "exactness")]
     let req = if args.exact {
-        req.with_exactness()
+        req.with_exactness(args.timeout)
     } else {
         req
     };
