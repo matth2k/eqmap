@@ -1,16 +1,16 @@
 [package]
 name = "lut-synth"
-version = "0.5.3"
-edition = "2021"
-default-run = "fam"
+version = "0.6.0"
+edition = "2024"
+default-run = "epak"
 
 [dependencies]
 bitvec = "1.0.1"
-clap = { version = "4.5.20", features = ["derive"] }
-egg = "0.9.5"
-indicatif = "0.17.8"
-serde = { version = "1.0.215", features = ["derive"] }
-serde_json = "1.0.133"
+clap = { version = "4.5.31", features = ["derive"] }
+egg = "0.10.0"
+indicatif = "0.17.11"
+serde = { version = "1.0.218", features = ["derive"] }
+serde_json = "1.0.140"
 sv-parser = "0.13.3"
 
 [lints.clippy]

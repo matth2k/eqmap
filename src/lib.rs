@@ -23,8 +23,8 @@ mod tests {
 
     use analysis::LutAnalysis;
     use egg::{Analysis, Language, RecExpr};
-    use lut::{verify_expr, LutExprInfo, LutLang};
-    use verilog::{sv_parse_wrapper, SVModule, SVPrimitive};
+    use lut::{LutExprInfo, LutLang, verify_expr};
+    use verilog::{SVModule, SVPrimitive, sv_parse_wrapper};
 
     use super::*;
 
@@ -87,9 +87,9 @@ mod tests {
         let prog = 1337;
         let const_true = LutLang::Const(const_val);
         let prog_node = LutLang::Program(prog);
-        let egraph = egg::EGraph::default();
-        let const_analysis = LutAnalysis::make(&egraph, &const_true);
-        let prog_analysis = LutAnalysis::make(&egraph, &prog_node);
+        let mut egraph = egg::EGraph::default();
+        let const_analysis = LutAnalysis::make(&mut egraph, &const_true);
+        let prog_analysis = LutAnalysis::make(&mut egraph, &prog_node);
         assert_eq!(const_analysis.get_as_const(), Ok(const_val));
         assert_eq!(prog_analysis.get_program(), Ok(prog));
         assert!(const_analysis.get_program().is_err());
@@ -111,8 +111,8 @@ mod tests {
     fn test_principal_inputs() {
         let input = "a";
         let input_node = LutLang::Var(input.to_string().into());
-        let egraph = egg::EGraph::default();
-        let input_analysis = LutAnalysis::make(&egraph, &input_node);
+        let mut egraph = egg::EGraph::default();
+        let input_analysis = LutAnalysis::make(&mut egraph, &input_node);
         assert!(input_analysis.is_an_input());
         assert!(input_analysis.get_as_const().is_err());
         assert!(input_analysis.get_program().is_err());
@@ -745,33 +745,39 @@ endmodule"
     #[test]
     fn test_cycle() {
         let simple_cycle_expr: RecExpr<LutLang> = "(CYCLE (REG (AND a (ARG 0))))".parse().unwrap();
-        assert!(LutLang::func_equiv(
-            &simple_cycle_expr,
-            &"(CYCLE (REG (AND a (ARG 0))))".parse().unwrap()
-        )
-        .is_equiv());
+        assert!(
+            LutLang::func_equiv(
+                &simple_cycle_expr,
+                &"(CYCLE (REG (AND a (ARG 0))))".parse().unwrap()
+            )
+            .is_equiv()
+        );
         let complex_cycle_expr: RecExpr<LutLang> =
             "(CYCLE (XOR (ARG 0) (CYCLE (REG (AND a (ARG 1))))))"
                 .parse()
                 .unwrap();
-        assert!(LutLang::func_equiv(
-            &complex_cycle_expr,
-            &"(CYCLE (XOR (ARG 0) (CYCLE (REG (AND a (ARG 1))))))"
-                .parse()
-                .unwrap()
-        )
-        .is_equiv());
+        assert!(
+            LutLang::func_equiv(
+                &complex_cycle_expr,
+                &"(CYCLE (XOR (ARG 0) (CYCLE (REG (AND a (ARG 1))))))"
+                    .parse()
+                    .unwrap()
+            )
+            .is_equiv()
+        );
         let eval_cycle_expr: RecExpr<LutLang> = "(CYCLE (REG in))".parse().unwrap();
         assert!(
             LutLang::func_equiv(&eval_cycle_expr, &"(REG in)".parse().unwrap()).is_inconclusive()
         );
-        assert!(LutLang::func_equiv(
-            &simple_cycle_expr,
-            &"(CYCLE (REG (AND (XOR (AND a 1) (ARG 0)) (ARG 0))))"
-                .parse()
-                .unwrap()
-        )
-        .is_inconclusive());
+        assert!(
+            LutLang::func_equiv(
+                &simple_cycle_expr,
+                &"(CYCLE (REG (AND (XOR (AND a 1) (ARG 0)) (ARG 0))))"
+                    .parse()
+                    .unwrap()
+            )
+            .is_inconclusive()
+        );
     }
 
     #[test]
