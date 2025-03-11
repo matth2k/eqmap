@@ -5,6 +5,8 @@
 */
 use super::cost::{DepthCostFn, GateCostFn, KLUTCostFn, NegativeCostFn};
 use super::lut::{CircuitStats, LutExprInfo, LutLang, canonicalize_expr, verify_expr};
+#[cfg(feature = "graph_dumps")]
+use super::serialize::serialize_egraph;
 use egg::{
     Analysis, BackoffScheduler, CostFunction, Explanation, Extractor, FromOpError, Language,
     RecExpr, RecExprParseError, Rewrite, Runner, StopReason,
@@ -321,6 +323,10 @@ where
     /// Produce a report which records extra stats.
     produce_rpt: bool,
 
+    /// Produce a condensed JSON dump of the e-graph
+    #[cfg(feature = "graph_dumps")]
+    dump_egraph: Option<PathBuf>,
+
     /// The maximum number of nodes to canonicalize
     max_canon_size: usize,
 
@@ -346,6 +352,8 @@ impl<A: Analysis<LutLang>> std::default::Default for SynthRequest<A> {
             max_canon_size: MAX_CANON_SIZE,
             canonicalized: false,
             result: None,
+            #[cfg(feature = "graph_dumps")]
+            dump_egraph: None,
         }
     }
 }
@@ -365,6 +373,8 @@ impl<A: Analysis<LutLang> + std::clone::Clone> std::clone::Clone for SynthReques
             max_canon_size: self.max_canon_size,
             canonicalized: self.canonicalized,
             result: None,
+            #[cfg(feature = "graph_dumps")]
+            dump_egraph: self.dump_egraph.clone(),
         }
     }
 }
@@ -470,6 +480,16 @@ where
     pub fn with_report(self) -> Self {
         Self {
             produce_rpt: true,
+            result: None,
+            ..self
+        }
+    }
+
+    /// Collect additional stats with e-graph build.
+    #[cfg(feature = "graph_dumps")]
+    pub fn with_graph_dump(self, p: PathBuf) -> Self {
+        Self {
+            dump_egraph: Some(p),
             result: None,
             ..self
         }
@@ -736,7 +756,6 @@ where
         }
 
         let rpt = if self.produce_rpt {
-            // TODO: Gathering stats should not be this slow
             eprintln!("INFO: Generating report...");
             Some(
                 SynthReport::new(&self.expr, extraction_time.as_secs_f64(), runner, &best)
@@ -763,6 +782,22 @@ where
             let e = Extractor::new(egraph, c);
             e.find_best(root).1
         })
+    }
+
+    /// Serialize the e-graph with an associated cost provided by `c`.
+    #[cfg(feature = "graph_dumps")]
+    pub fn serialize_with_greedy_cost<C>(&mut self, c: C, w: &mut impl Write) -> std::io::Result<()>
+    where
+        C: CostFunction<LutLang>,
+        <C as CostFunction<LutLang>>::Cost: Serialize + std::default::Default,
+        A: Analysis<LutLang> + std::default::Default,
+    {
+        if self.result.is_none() {
+            self.explore()
+                .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+        }
+        let runner = self.result.as_ref().unwrap();
+        serialize_egraph(&runner.egraph, &runner.roots, c, w)
     }
 
     /// Simplify expression with the extraction strategy in request `self`.
@@ -839,6 +874,13 @@ where
     let mut result = req
         .simplify_expr()
         .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+
+    #[cfg(feature = "graph_dumps")]
+    if let Some(p) = &req.dump_egraph {
+        eprintln!("INFO: Dumping e-graph...");
+        let mut file = std::fs::File::create(p)?;
+        req.serialize_with_greedy_cost(DepthCostFn, &mut file)?;
+    }
 
     if verbose && result.has_explanation() {
         eprintln!("INFO: Flattened proof");

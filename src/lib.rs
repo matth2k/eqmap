@@ -15,6 +15,8 @@ pub mod driver;
 pub mod logic;
 pub mod lut;
 pub mod rewrite;
+#[cfg(feature = "graph_dumps")]
+pub mod serialize;
 pub mod verilog;
 
 #[cfg(test)]
@@ -265,7 +267,7 @@ mod tests {
   output y;
   wire y;
   assign y = d;
-endmodule"
+endmodule\n"
             .to_string()
     }
 
@@ -310,7 +312,7 @@ endmodule"
   wire y1;
   assign y1 = y0;
   assign y0 = d;
-endmodule"
+endmodule\n"
             .to_string();
         assert_eq!(module.to_string(), correct);
     }
@@ -387,7 +389,7 @@ endmodule"
       .I5(s0),
       .O(y)
   );
-endmodule"
+endmodule\n"
             .to_string();
         assert_eq!(output, golden);
     }
@@ -439,7 +441,7 @@ endmodule"
       .R(1'h0),
       .Q(y)
   );
-endmodule"
+endmodule\n"
             .to_string();
         assert_eq!(output, golden);
     }
@@ -571,7 +573,7 @@ endmodule"
       .I2(s1),
       .O(y)
   );
-endmodule"
+endmodule\n"
             .to_string();
         assert_eq!(module.to_string(), golden);
     }
@@ -602,7 +604,7 @@ endmodule"
       .R(1'h0),
       .Q(y)
   );
-endmodule"
+endmodule\n"
             .to_string();
         assert_eq!(module.to_string(), golden);
     }
@@ -671,7 +673,7 @@ endmodule"
       .B(__4__),
       .Y(y)
   );
-endmodule"
+endmodule\n"
             .to_string();
         assert_eq!(module.to_string(), golden);
     }

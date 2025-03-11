@@ -7,7 +7,7 @@ use lut_synth::{
     verilog::{SVModule, sv_parse_wrapper},
 };
 use std::{
-    io::{Read, stdin},
+    io::{Read, Write, stdin},
     path::PathBuf,
 };
 
@@ -24,6 +24,11 @@ struct Args {
     /// If provided, output a JSON file with result data
     #[arg(long)]
     report: Option<PathBuf>,
+
+    /// If provided, output a condensed JSON file with the e-graph
+    #[cfg(feature = "graph_dumps")]
+    #[arg(long)]
+    dump_graph: Option<PathBuf>,
 
     /// Return an error if the graph does not reach saturation
     #[arg(short = 'a', long, default_value_t = false)]
@@ -184,6 +189,12 @@ fn main() -> std::io::Result<()> {
         req
     };
 
+    #[cfg(feature = "graph_dumps")]
+    let req = match args.dump_graph {
+        Some(p) => req.with_graph_dump(p),
+        None => req,
+    };
+
     let req = if args.min_depth {
         req.with_min_depth()
     } else {
@@ -248,10 +259,11 @@ fn main() -> std::io::Result<()> {
     module.append_inputs(&mut new_inputs);
 
     if let Some(p) = args.output {
-        std::fs::write(p, module.to_string())?;
+        let mut file = std::fs::File::create(p)?;
+        write!(file, "{}", module)?;
         eprintln!("INFO: Goodbye");
     } else {
-        println!("{}", module);
+        print!("{}", module);
     }
 
     Ok(())
