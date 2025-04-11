@@ -6,6 +6,8 @@
 use super::analysis::LutAnalysis;
 use super::check::{Check, equivalent, inconclusive, not_equivalent};
 use super::cost::DepthCostFn;
+use super::cost::{GateCostFn, KLUTCostFn};
+use super::driver::{Canonical, CircuitLang, EquivCheck, Explanable, Extractable};
 use bitvec::prelude::*;
 use egg::CostFunction;
 use egg::Id;
@@ -519,7 +521,7 @@ where
 }
 
 /// Verify the grammar of a [LutLang] expression from its root
-pub fn verify_expr(expr: &RecExpr<LutLang>) -> Result<(), String> {
+fn verify_expr(expr: &RecExpr<LutLang>) -> Result<(), String> {
     expr.as_ref().last().unwrap().verify_rec(expr)?;
     Ok(())
 }
@@ -948,7 +950,7 @@ where
 
 /// Simplify expressions by greedily folding LUTs based on invariant programs and constant inputs.
 /// This function should also produce expressions that are not redundant in any nodes.
-pub fn fold_expr_greedily<F>(expr: RecExpr<LutLang>, folder: F) -> (RecExpr<LutLang>, bool)
+fn fold_expr_greedily<F>(expr: RecExpr<LutLang>, folder: F) -> (RecExpr<LutLang>, bool)
 where
     F: Fn(&RecExpr<LutLang>, &mut RecExpr<LutLang>, Id) -> (LutLang, bool) + Copy,
 {
@@ -978,7 +980,7 @@ where
 /// Canonicalize expressions by naively mapping gates to LUTs.
 /// Then, greedily fold the LUTs based on invariant programs and constant inputs.
 /// This function should also produce expressions that are not redundant in any nodes.
-pub fn canonicalize_expr(expr: RecExpr<LutLang>) -> RecExpr<LutLang> {
+fn canonicalize_expr(expr: RecExpr<LutLang>) -> RecExpr<LutLang> {
     let moved = expr.as_ref().to_vec();
     let mut mapping: HashMap<Id, Id> = HashMap::new();
     let mut rewritten: RecExpr<LutLang> = RecExpr::default();
@@ -1053,3 +1055,75 @@ pub fn canonicalize_expr(expr: RecExpr<LutLang>) -> RecExpr<LutLang> {
 
     result
 }
+
+impl Explanable for LutLang {
+    fn get_explanations<A>(
+        expr: &RecExpr<Self>,
+        other: &RecExpr<Self>,
+        runner: &mut egg::Runner<Self, A>,
+    ) -> Result<Vec<egg::Explanation<Self>>, String>
+    where
+        A: egg::Analysis<Self>,
+    {
+        match (
+            expr.as_ref().last().unwrap(),
+            other.as_ref().last().unwrap(),
+        ) {
+            (LutLang::Bus(i), LutLang::Bus(j)) => {
+                if i.len() != j.len() {
+                    return Err("Root expression types are mismatched".to_string());
+                }
+
+                let mut v = Vec::new();
+                for (&a, &b) in i.into_iter().zip(j).rev() {
+                    let a_e = LutExprInfo::new(expr).clone_subexpression(a).unwrap();
+                    let b_e = LutExprInfo::new(other).clone_subexpression(b).unwrap();
+                    v.push(runner.explain_equivalence(&a_e, &b_e));
+                }
+                Ok(v)
+            }
+            (LutLang::Bus(_), _) | (_, LutLang::Bus(_)) => {
+                Err("Root expression types are mismatched".to_string())
+            }
+            _ => Ok(vec![runner.explain_equivalence(expr, other)]),
+        }
+    }
+}
+
+impl Extractable for LutLang {
+    fn depth_cost_fn() -> impl CostFunction<Self, Cost = i64> {
+        DepthCostFn
+    }
+
+    fn cell_cost_with_reg_weight_fn(cut_size: usize, w: u64) -> impl CostFunction<Self> {
+        KLUTCostFn::new(cut_size).with_reg_weight(w)
+    }
+
+    fn filter_cost_fn(set: std::collections::HashSet<String>) -> impl CostFunction<Self> {
+        GateCostFn::new(set)
+    }
+}
+
+impl Canonical for LutLang {
+    fn expr_is_canonical(expr: &RecExpr<Self>) -> bool {
+        let info = LutExprInfo::new(expr);
+        info.is_canonical()
+    }
+
+    fn canonicalize_expr(expr: RecExpr<Self>) -> RecExpr<Self> {
+        canonicalize_expr(expr)
+    }
+
+    fn verify_expr(expr: &RecExpr<Self>) -> Result<(), String> {
+        verify_expr(expr)
+    }
+}
+
+impl EquivCheck for LutLang {
+    fn check_expr(expr: &RecExpr<Self>, other: &RecExpr<Self>) -> Check {
+        let info = LutExprInfo::new(expr);
+        info.check(other)
+    }
+}
+
+impl CircuitLang for LutLang {}

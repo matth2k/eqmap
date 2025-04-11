@@ -16,9 +16,11 @@ pub struct KLUTCostFn {
 }
 
 impl KLUTCostFn {
-    const DEF_REG_COST: u64 = 1;
+    /// The default cost of a register
+    pub const DEF_REG_COST: u64 = 1;
 
     /// Returns a new cost function with the given `k` value.
+    /// Registers have a default weight of [Self::DEF_REG_COST].
     pub fn new(k: usize) -> Self {
         if k < 1 || k > LutLang::MAX_LUT_SIZE {
             panic!("k must be between 1 and {}", LutLang::MAX_LUT_SIZE);
@@ -97,31 +99,26 @@ impl CostFunction<LutLang> for DepthCostFn {
     }
 }
 
-/// This takes the negative of the cost function and returns a new cost function
+/// This takes the negative of the cost function and returns a new cost function.
 /// This will cause a RAM bomb whenever there is a cycle in the e-graph (which is often)
-pub struct NegativeCostFn<C>
-where
-    C: CostFunction<LutLang>,
-{
+pub struct NegativeCostFn<C> {
     c: C,
 }
 
-impl<C> NegativeCostFn<C>
-where
-    C: CostFunction<LutLang>,
-{
+impl<C> NegativeCostFn<C> {
     /// Returns a new cost function that takes the complement of the given cost function.
     pub fn new(c: C) -> Self {
         Self { c }
     }
 }
 
-impl<M> CostFunction<LutLang> for NegativeCostFn<M>
+impl<L, M> CostFunction<L> for NegativeCostFn<M>
 where
-    M: CostFunction<LutLang, Cost = i64>,
+    L: Language,
+    M: CostFunction<L, Cost = i64>,
 {
     type Cost = i64;
-    fn cost<C>(&mut self, enode: &LutLang, costs: C) -> Self::Cost
+    fn cost<C>(&mut self, enode: &L, costs: C) -> Self::Cost
     where
         C: FnMut(Id) -> Self::Cost,
     {

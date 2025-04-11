@@ -1,10 +1,11 @@
 /*!
 
-  The code module common infrastructure to created command-line tools for logic synthesis.
+  Common infrastructure to created command-line tools for logic synthesis using egg.
 
 */
-use super::cost::{DepthCostFn, GateCostFn, KLUTCostFn, NegativeCostFn};
-use super::lut::{CircuitStats, LutExprInfo, LutLang, canonicalize_expr, verify_expr};
+use super::check::Check;
+use super::cost::NegativeCostFn;
+use super::lut::{CircuitStats, LutExprInfo, LutLang};
 #[cfg(feature = "graph_dumps")]
 use super::serialize::serialize_egraph;
 use egg::{
@@ -24,6 +25,26 @@ use std::{
 };
 
 const MAX_CANON_SIZE: usize = 30000;
+
+/// A trait to facilitate the generation of text-based reports on output ciruits.
+/// For E-Pack, this includes things like LUT count and circuit-depth.
+pub trait Report<L: Language>
+where
+    Self: Serialize + Sized,
+{
+    /// Create a new [Report] comparing a pre-optimized `input` and a post-optimized `output`.
+    fn new<A>(
+        input: &RecExpr<L>,
+        output: &RecExpr<L>,
+        extract_time: f64,
+        runner: &Runner<L, A>,
+    ) -> Result<Self, String>
+    where
+        A: Analysis<L>;
+
+    /// Rewrite the module name of the [Report].
+    fn with_name(self, name: &str) -> Self;
+}
 
 /// A struct to compare two results before and after some optimization.
 #[derive(Debug, Serialize)]
@@ -116,18 +137,47 @@ impl SynthReport {
     }
 }
 
-/// The output of a [SynthRequest] run.
-/// It optionally contains an explanation and a [SynthReport] report.
-pub struct SynthOutput {
-    expr: RecExpr<LutLang>,
-    expl: Option<Vec<Explanation<LutLang>>>,
-    rpt: Option<SynthReport>,
+impl Report<LutLang> for SynthReport {
+    fn new<A>(
+        input: &RecExpr<LutLang>,
+        output: &RecExpr<LutLang>,
+        extract_time: f64,
+        runner: &Runner<LutLang, A>,
+    ) -> Result<Self, String>
+    where
+        A: Analysis<LutLang>,
+    {
+        Ok(Self::new(input, extract_time, runner, output))
+    }
+
+    fn with_name(self, name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            ..self
+        }
+    }
 }
 
-impl SynthOutput {
+/// The output of a [SynthRequest] run.
+/// It optionally contains an explanation and a [Report].
+pub struct SynthOutput<L, R>
+where
+    L: Language,
+    R: Report<L>,
+{
+    expr: RecExpr<L>,
+    expl: Option<Vec<Explanation<L>>>,
+    rpt: Option<R>,
+}
+
+impl<L, R> SynthOutput<L, R>
+where
+    L: Language + egg::FromOp<Error = FromOpError> + std::fmt::Display,
+    R: Report<L>,
+{
     /// Create a new [SynthOutput] from a string.
     pub fn new(s: &str) -> Result<Self, RecExprParseError<FromOpError>> {
-        let expr: RecExpr<LutLang> = s.parse()?;
+        let expr: RecExpr<L> = s.parse()?;
         Ok(Self {
             expr,
             expl: None,
@@ -136,12 +186,12 @@ impl SynthOutput {
     }
 
     /// Get the expression of the output.
-    pub fn get_expr(&self) -> &RecExpr<LutLang> {
+    pub fn get_expr(&self) -> &RecExpr<L> {
         &self.expr
     }
 
     /// Get the explanation for all output wires
-    pub fn get_expl(&self) -> &Option<Vec<Explanation<LutLang>>> {
+    pub fn get_expl(&self) -> &Option<Vec<Explanation<L>>> {
         &self.expl
     }
 
@@ -182,11 +232,6 @@ impl SynthOutput {
         }))
     }
 
-    /// Get the analysis for an output expression.
-    pub fn get_analysis(&self) -> LutExprInfo {
-        LutExprInfo::new(&self.expr)
-    }
-
     /// Check if the output has an explanation.
     pub fn has_explanation(&self) -> bool {
         self.expl.is_some()
@@ -213,15 +258,16 @@ impl SynthOutput {
         Self {
             expr: self.expr,
             expl: self.expl,
-            rpt: Some(SynthReport {
-                name: name.to_string(),
-                ..self.rpt.unwrap()
-            }),
+            rpt: Some(self.rpt.unwrap().with_name(name)),
         }
     }
 }
 
-impl std::fmt::Display for SynthOutput {
+impl<L, R> std::fmt::Display for SynthOutput<L, R>
+where
+    L: Language + std::fmt::Display,
+    R: Report<L>,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         if self.expr.as_ref().is_empty() {
             return Ok(());
@@ -276,10 +322,10 @@ enum ExtractStrat {
     MaxDepth,
     /// Extract minimum circuit depth.
     MinDepth,
-    /// Extract LUTs up to size `k`.
-    LUTCount(usize),
-    /// Extract LUTs up to size `k` and registers with cost ratio `w`.
-    LUTCountRegWeighted(usize, u64),
+    /// Extract Cells/LUTs with at most `k` inputs.
+    CellCount(usize),
+    /// Extract Cells/LUTs with at most `k` inputs as well as registers with cost ratio `w`.
+    CellCountRegWeighted(usize, u64),
     /// Disassemble into set of logic gates.
     Disassemble(HashSet<String>),
     #[cfg(feature = "exactness")]
@@ -287,28 +333,29 @@ enum ExtractStrat {
     Exact(u64),
 }
 
+/// The list of gates that must be reachable by the disassembling rewrite rule system.
+pub const GATE_WHITELIST_STR: &str = "MUX,AND2,OR2,XOR2,NOT,INV,REG,NAND2,NOR2";
+
+/// The list of gates that must be reachable by the disassembling rewrite rule system.
+pub const GATE_WHITELIST: [&str; 9] = [
+    "MUX", "AND2", "OR2", "XOR2", "NOT", "INV", "REG", "NAND2", "NOR2",
+];
+
 impl ExtractStrat {
-    const WHITELIST_STR: &'static str = "MUX,AND2,OR2,XOR2,NOT,INV,REG,NAND2,NOR2";
-
-    const WHITELIST: &'static [&'static str] = &[
-        "MUX", "AND2", "OR2", "XOR2", "NOT", "INV", "REG", "NAND2", "NOR2",
-    ];
-
     /// Create an extraction strategy from a comma-separated list of gates.
     /// For example, `list` can be `"MUX,AND2,NOT"`.
     pub fn from_gate_set(list: &str) -> Result<Self, String> {
         if list.is_empty() || list == "all" {
-            return Self::from_gate_set(Self::WHITELIST_STR);
+            return Self::from_gate_set(GATE_WHITELIST_STR);
         }
 
         // list is a comma-deliminted string
         let gates: HashSet<String> = list.split(',').map(|s| s.to_string()).collect();
         for gate in &gates {
-            if !Self::WHITELIST.contains(&gate.as_str()) {
+            if !GATE_WHITELIST.contains(&gate.as_str()) {
                 return Err(format!(
                     "Gate {} is not in the whitelist {}",
-                    gate,
-                    Self::WHITELIST_STR
+                    gate, GATE_WHITELIST_STR
                 ));
             }
         }
@@ -316,18 +363,95 @@ impl ExtractStrat {
     }
 }
 
-/// A request to explore and extract an expression.
-/// The request can be configured with various option
-/// before dedicating to a particular expression.
-pub struct SynthRequest<A>
+/// A trait to represent that a language has some form of equivalence-checking in the form of a [Check]
+pub trait EquivCheck
 where
-    A: Analysis<LutLang>,
+    Self: Sized,
+{
+    /// Check if `expr` and `other` are equivalent.
+    fn check_expr(expr: &RecExpr<Self>, other: &RecExpr<Self>) -> Check;
+}
+
+/// A trait to represent that a language can be canonicalized.
+pub trait Canonical
+where
+    Self: Sized,
+{
+    /// Returns true if the expression is canonical.
+    fn expr_is_canonical(expr: &RecExpr<Self>) -> bool;
+
+    /// Returns a canonicalization of the expression.
+    fn canonicalize_expr(expr: RecExpr<Self>) -> RecExpr<Self>;
+
+    /// Verify that the expression does not have any extra syntax errors.
+    fn verify_expr(expr: &RecExpr<Self>) -> Result<(), String>;
+}
+
+/// A trait to represent that a language is extractable under the [SynthRequest] optimization goals.
+/// In short, three main cost functions are needed to cover all extraction strategies:
+/// one for depth, one for cell count, and one for filtering/disassembly.
+pub trait Extractable
+where
+    Self: Language,
+{
+    /// Returns the depth cost function for the language.
+    fn depth_cost_fn() -> impl CostFunction<Self, Cost = i64>;
+
+    /// Returns the area cost function for the language, only selecting cells with fewer than `cut_size` inputs.
+    /// Additionally, registers have a parameterized weight `w`.
+    fn cell_cost_with_reg_weight_fn(cut_size: usize, w: u64) -> impl CostFunction<Self>;
+
+    /// Returns the area cost function for the language, only selecting cells with fewer than `cut_size` inputs.
+    /// In this case, registers have weight 1.
+    fn cell_cost_fn(cut_size: usize) -> impl CostFunction<Self> {
+        Self::cell_cost_with_reg_weight_fn(cut_size, 1)
+    }
+
+    /// Returns a cost function used for extracting only certain types nodes.
+    fn filter_cost_fn(set: HashSet<String>) -> impl CostFunction<Self>;
+}
+
+/// A trait to represent that an expression is not best explained by relating its roots.
+/// As an example, explanations of [LutLang::Bus] are not useful.
+pub trait Explanable
+where
+    Self: Language,
+{
+    /// Get a list of explanations for the relevant sub-terms in `expr` and `other` using the egraph in `runnner`.
+    fn get_explanations<A>(
+        expr: &RecExpr<Self>,
+        other: &RecExpr<Self>,
+        runner: &mut Runner<Self, A>,
+    ) -> Result<Vec<Explanation<Self>>, String>
+    where
+        A: Analysis<Self>;
+}
+
+/// An alias to all the traits needed to be implemented in order to use the [SynthRequest] API.
+pub trait CircuitLang:
+    Language
+    + Explanable
+    + Extractable
+    + Canonical
+    + EquivCheck
+    + std::fmt::Display
+    + egg::FromOp<Error = FromOpError>
+{
+}
+
+/// A request to explore and extract an expression.
+/// The request can be configured with various options
+/// before dedicating to a particular input and compilation strategy.
+pub struct SynthRequest<L, A>
+where
+    L: Language,
+    A: Analysis<L>,
 {
     /// The expression to simplify.
-    expr: RecExpr<LutLang>,
+    expr: RecExpr<L>,
 
     /// The rewrite rules used to simplify the expression.
-    rules: Vec<Rewrite<LutLang, A>>,
+    rules: Vec<Rewrite<L, A>>,
 
     /// The extraction strategy to use.
     extract_strat: ExtractStrat,
@@ -362,15 +486,15 @@ where
     canonicalized: bool,
 
     /// The running result
-    result: Option<Runner<LutLang, A>>,
+    result: Option<Runner<L, A>>,
 }
 
-impl<A: Analysis<LutLang>> std::default::Default for SynthRequest<A> {
+impl<L: Language, A: Analysis<L>> std::default::Default for SynthRequest<L, A> {
     fn default() -> Self {
         Self {
             expr: RecExpr::default(),
             rules: Vec::new(),
-            extract_strat: ExtractStrat::LUTCount(6),
+            extract_strat: ExtractStrat::CellCount(6),
             build_strat: BuildStrat::Custom(10, 20_000, 16),
             no_canonicalize: false,
             assert_sat: false,
@@ -386,7 +510,7 @@ impl<A: Analysis<LutLang>> std::default::Default for SynthRequest<A> {
     }
 }
 
-impl<A: Analysis<LutLang> + std::clone::Clone> std::clone::Clone for SynthRequest<A> {
+impl<L: Language, A: Analysis<L> + std::clone::Clone> std::clone::Clone for SynthRequest<L, A> {
     fn clone(&self) -> Self {
         Self {
             expr: self.expr.clone(),
@@ -407,22 +531,23 @@ impl<A: Analysis<LutLang> + std::clone::Clone> std::clone::Clone for SynthReques
     }
 }
 
-impl<A> SynthRequest<A>
+impl<L, A> SynthRequest<L, A>
 where
-    A: Analysis<LutLang>,
+    L: CircuitLang,
+    A: Analysis<L> + Default,
 {
-    /// Request greedy extraction of LUTs up to size `k`.
+    /// Request greedy extraction of cells/LUTs with at most `k` inputs.
     pub fn with_k(self, k: usize) -> Self {
         Self {
-            extract_strat: ExtractStrat::LUTCount(k),
+            extract_strat: ExtractStrat::CellCount(k),
             ..self
         }
     }
 
-    /// Request greedy extraction of LUTs up to size `k` and registers with weight `w`.
+    /// Request greedy extraction of cells/LUTs with at most `k` inputs and registers with weight `w`.
     pub fn with_klut_regw(self, k: usize, w: u64) -> Self {
         Self {
-            extract_strat: ExtractStrat::LUTCountRegWeighted(k, w),
+            extract_strat: ExtractStrat::CellCountRegWeighted(k, w),
             ..self
         }
     }
@@ -452,15 +577,15 @@ where
         }
     }
 
-    /// Extract by disassembling into logic gates.
+    /// Extract by disassembling into basic logic gates. The exact list can be found at [GATE_WHITELIST].
     pub fn with_disassembler(self) -> Self {
         Self {
-            extract_strat: ExtractStrat::from_gate_set(ExtractStrat::WHITELIST_STR).unwrap(),
+            extract_strat: ExtractStrat::from_gate_set(GATE_WHITELIST_STR).unwrap(),
             ..self
         }
     }
 
-    /// Extract by disassembling into logic gates in the `list`.
+    /// Extract by disassembling into logic gates in the `list`. Elements in the list must be matched against elements in [GATE_WHITELIST].
     pub fn with_disassembly_into(self, list: &str) -> Result<Self, String> {
         Ok(Self {
             extract_strat: ExtractStrat::from_gate_set(list)?,
@@ -563,7 +688,7 @@ where
     }
 
     /// Run exploration with expression `expr`.
-    pub fn with_expr(self, expr: RecExpr<LutLang>) -> Self {
+    pub fn with_expr(self, expr: RecExpr<L>) -> Self {
         Self {
             expr,
             result: None,
@@ -572,21 +697,18 @@ where
     }
 
     /// Run exploration with `more_rules` added on.
-    pub fn with_rules(mut self, mut more_rules: Vec<Rewrite<LutLang, A>>) -> Self {
+    pub fn with_rules(mut self, mut more_rules: Vec<Rewrite<L, A>>) -> Self {
         self.rules.append(&mut more_rules);
         self.result = None;
         self
     }
 
     /// Return a reference to the underlying expression
-    pub fn get_expr(&self) -> &RecExpr<LutLang> {
+    pub fn get_expr(&self) -> &RecExpr<L> {
         &self.expr
     }
 
-    fn explore(&mut self) -> Result<(), String>
-    where
-        A: Analysis<LutLang> + std::default::Default,
-    {
+    fn explore(&mut self) -> Result<(), String> {
         let runner = if self.gen_proof {
             eprintln!("WARNING: Proof generation is on (slow)");
             Runner::default().with_explanations_enabled()
@@ -690,25 +812,22 @@ where
             _ => None,
         };
 
+        let oexp = self.expr.clone();
         if self.expr.as_ref().len() > self.max_canon_size {
             eprintln!(
                 "WARNING: Input is too large to canonicalize ({} nodes)",
                 self.expr.as_ref().len()
             );
         } else if !self.no_canonicalize {
-            let info = LutExprInfo::new(&self.expr);
-            self.canonicalized = info.contains_gates();
-            self.expr = canonicalize_expr(self.expr.clone());
+            self.canonicalized = !L::expr_is_canonical(&oexp);
+            self.expr = L::canonicalize_expr(self.expr.clone());
         }
 
-        if self.gen_proof {
-            let info = LutExprInfo::new(&self.expr);
-            if info.check(&self.expr).is_not_equiv() {
-                return Err(format!(
-                    "Folding the initial expression had an error: {}",
-                    self.expr
-                ));
-            }
+        if self.gen_proof && L::check_expr(&self.expr, &oexp).is_not_equiv() {
+            return Err(format!(
+                "Folding the initial expression had an error: {}",
+                self.expr
+            ));
         }
 
         self.result = Some(runner.with_expr(&self.expr).run(&self.rules));
@@ -733,10 +852,10 @@ where
     }
 
     /// Extract requested expression with `extractor`
-    pub fn extract_with<F>(&mut self, extractor: F) -> Result<SynthOutput, String>
+    pub fn extract_with<R, F>(&mut self, extractor: F) -> Result<SynthOutput<L, R>, String>
     where
-        F: FnOnce(&egg::EGraph<LutLang, A>, egg::Id) -> RecExpr<LutLang>,
-        A: Analysis<LutLang> + std::default::Default,
+        R: Report<L>,
+        F: FnOnce(&egg::EGraph<L, A>, egg::Id) -> RecExpr<L>,
     {
         if self.result.is_none() {
             self.explore()?;
@@ -780,10 +899,12 @@ where
 
         let rpt = if self.produce_rpt {
             eprintln!("INFO: Generating report...");
-            Some(
-                SynthReport::new(&self.expr, extraction_time.as_secs_f64(), runner, &best)
-                    .contains_gates(self.canonicalized),
-            )
+            Some(R::new(
+                &self.expr,
+                &best,
+                extraction_time.as_secs_f64(),
+                runner,
+            )?)
         } else {
             None
         };
@@ -802,10 +923,10 @@ where
     }
 
     /// Extract greedily requested expression with cost model `c`
-    pub fn greedy_extract_with<C>(&mut self, c: C) -> Result<SynthOutput, String>
+    pub fn greedy_extract_with<R, C>(&mut self, c: C) -> Result<SynthOutput<L, R>, String>
     where
-        C: CostFunction<LutLang>,
-        A: Analysis<LutLang> + std::default::Default,
+        R: Report<L>,
+        C: CostFunction<L>,
     {
         self.extract_with(|egraph, root| {
             let e = Extractor::new(egraph, c);
@@ -817,9 +938,8 @@ where
     #[cfg(feature = "graph_dumps")]
     pub fn serialize_with_greedy_cost<C>(&mut self, c: C, w: &mut impl Write) -> std::io::Result<()>
     where
-        C: CostFunction<LutLang>,
-        <C as CostFunction<LutLang>>::Cost: Serialize + std::default::Default,
-        A: Analysis<LutLang> + std::default::Default,
+        C: CostFunction<L>,
+        <C as CostFunction<L>>::Cost: Serialize + std::default::Default,
     {
         if self.result.is_none() {
             self.explore()
@@ -830,13 +950,7 @@ where
     }
 
     /// Get individual proofs for each wire at the root of `best`.
-    fn get_explanations(
-        &mut self,
-        best: &RecExpr<LutLang>,
-    ) -> Result<Vec<Explanation<LutLang>>, String>
-    where
-        A: Analysis<LutLang> + std::default::Default,
-    {
+    fn get_explanations(&mut self, best: &RecExpr<L>) -> Result<Vec<Explanation<L>>, String> {
         if !self.gen_proof {
             return Err("Proof generation was not enabled".to_string());
         }
@@ -848,51 +962,30 @@ where
         let runner = self.result.as_mut().unwrap();
         let root_expr = &self.expr;
 
-        match (
-            root_expr.as_ref().last().unwrap(),
-            best.as_ref().last().unwrap(),
-        ) {
-            (LutLang::Bus(i), LutLang::Bus(j)) => {
-                if i.len() != j.len() {
-                    return Err("Root expression types are mismatched".to_string());
-                }
-
-                let mut v = Vec::new();
-                for (&a, &b) in i.into_iter().zip(j).rev() {
-                    let a_e = LutExprInfo::new(root_expr).clone_subexpression(a).unwrap();
-                    let b_e = LutExprInfo::new(best).clone_subexpression(b).unwrap();
-                    v.push(runner.explain_equivalence(&a_e, &b_e));
-                }
-                Ok(v)
-            }
-            (LutLang::Bus(_), _) | (_, LutLang::Bus(_)) => {
-                Err("Root expression types are mismatched".to_string())
-            }
-            _ => Ok(vec![runner.explain_equivalence(root_expr, best)]),
-        }
+        L::get_explanations(root_expr, best, runner)
     }
 
-    /// Simplify expression with the extraction strategy in request `self`.
-    pub fn simplify_expr(&mut self) -> Result<SynthOutput, String>
+    /// Simplify expression with the extraction strategy set in `self`.
+    pub fn simplify_expr<R>(&mut self) -> Result<SynthOutput<L, R>, String>
     where
-        A: Analysis<LutLang> + std::default::Default,
+        R: Report<L>,
     {
         match self.extract_strat.to_owned() {
-            ExtractStrat::MinDepth => self.greedy_extract_with(DepthCostFn),
+            ExtractStrat::MinDepth => self.greedy_extract_with(L::depth_cost_fn()),
             ExtractStrat::MaxDepth => {
                 eprintln!("WARNING: Maximizing cost on e-graphs with cycles will crash.");
-                self.greedy_extract_with(NegativeCostFn::new(DepthCostFn))
+                self.greedy_extract_with(NegativeCostFn::new(L::depth_cost_fn()))
             }
-            ExtractStrat::LUTCount(k) => self.greedy_extract_with(KLUTCostFn::new(k)),
-            ExtractStrat::LUTCountRegWeighted(k, w) => {
-                self.greedy_extract_with(KLUTCostFn::new(k).with_reg_weight(w))
+            ExtractStrat::CellCount(k) => self.greedy_extract_with(L::cell_cost_fn(k)),
+            ExtractStrat::CellCountRegWeighted(k, w) => {
+                self.greedy_extract_with(L::cell_cost_with_reg_weight_fn(k, w))
             }
-            ExtractStrat::Disassemble(set) => self.greedy_extract_with(GateCostFn::new(set)),
+            ExtractStrat::Disassemble(set) => self.greedy_extract_with(L::filter_cost_fn(set)),
             #[cfg(feature = "exactness")]
             ExtractStrat::Exact(t) => self.extract_with(|egraph, root| {
                 eprintln!("INFO: ILP ON");
                 let mut e = egg::LpExtractor::new(egraph, egg::AstSize);
-                canonicalize_expr(e.timeout(t as f64).solve(root))
+                L::canonicalize_expr(e.timeout(t as f64).solve(root))
             }),
         }
     }
@@ -922,19 +1015,21 @@ pub fn simple_reader(cmd: Option<String>, input_file: Option<PathBuf>) -> std::i
     Ok(buf)
 }
 
-/// Compile a [LutLang] expression using a baseline request `req`.
+/// Compile a [CircuitLang] expression using a baseline request `req`.
 /// The output expression is returned as a [SynthOutput]. Everything else goes to stderr.
-pub fn process_expression<A>(
-    expr: RecExpr<LutLang>,
-    req: SynthRequest<A>,
+pub fn process_expression<L, A, R>(
+    expr: RecExpr<L>,
+    req: SynthRequest<L, A>,
     no_verify: bool,
     verbose: bool,
-) -> std::io::Result<SynthOutput>
+) -> std::io::Result<SynthOutput<L, R>>
 where
-    A: Analysis<LutLang> + Clone + Default,
+    L: CircuitLang,
+    A: Analysis<L> + Clone + Default,
+    R: Report<L>,
 {
     if !no_verify {
-        verify_expr(&expr).map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+        L::verify_expr(&expr).map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
     }
 
     if cfg!(debug_assertions) {
@@ -951,7 +1046,7 @@ where
     if let Some(p) = &req.dump_egraph {
         eprintln!("INFO: Dumping e-graph...");
         let mut file = std::fs::File::create(p)?;
-        req.serialize_with_greedy_cost(DepthCostFn, &mut file)?;
+        req.serialize_with_greedy_cost(L::depth_cost_fn(), &mut file)?;
     }
 
     if verbose && result.has_explanation() {
@@ -976,7 +1071,7 @@ where
     if no_verify {
         eprintln!("INFO: Skipping functionality tests...");
     } else {
-        let check = LutExprInfo::new(&expr).check(simplified);
+        let check = L::check_expr(&expr, simplified);
         if check.is_inconclusive() && verbose {
             eprintln!("WARNING: Functionality verification inconclusive");
         }
@@ -1001,16 +1096,19 @@ where
     Ok(result)
 }
 
-/// Compile a [LutLang] expression from a line of text using a baseline request `req`.
+/// Compile a [CircuitLang] expression from a line of text using a baseline request `req`.
 /// The output expression is returned as a [SynthOutput]. Everything else goes to stderr.
-pub fn process_string_expression<A>(
+pub fn process_string_expression<L, A, R>(
     line: &str,
-    req: SynthRequest<A>,
+    req: SynthRequest<L, A>,
     no_verify: bool,
     verbose: bool,
-) -> std::io::Result<SynthOutput>
+) -> std::io::Result<SynthOutput<L, R>>
 where
-    A: Analysis<LutLang> + Clone + Default,
+    L: CircuitLang,
+    <L as egg::FromOp>::Error: serde::ser::StdError + Sync + Send + 'static,
+    A: Analysis<L> + Clone + Default,
+    R: Report<L>,
 {
     let line = line.trim();
     if line.starts_with("//") || line.is_empty() {
@@ -1021,7 +1119,7 @@ where
         });
     }
     let expr = line.split("//").next().unwrap();
-    let expr: RecExpr<LutLang> = expr
+    let expr: RecExpr<L> = expr
         .parse()
         .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
 

@@ -2,7 +2,7 @@ use clap::Parser;
 #[cfg(feature = "dyn_decomp")]
 use lut_synth::rewrite::dyn_decompositions;
 use lut_synth::{
-    driver::{SynthRequest, process_expression},
+    driver::{SynthReport, SynthRequest, process_expression},
     rewrite::{all_static_rules, register_retiming},
     verilog::{SVModule, sv_parse_wrapper},
 };
@@ -231,8 +231,8 @@ fn main() -> std::io::Result<()> {
         .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
 
     eprintln!("INFO: Building e-graph...");
-    let result =
-        process_expression(expr, req, args.no_verify, args.verbose)?.with_name(f.get_name());
+    let result = process_expression::<_, _, SynthReport>(expr, req, args.no_verify, args.verbose)?
+        .with_name(f.get_name());
 
     if let Some(p) = args.report {
         let mut writer = std::fs::File::create(p)?;
@@ -250,13 +250,7 @@ fn main() -> std::io::Result<()> {
 
     // Unused inputs from the original module are lost upon conversion to a LutLang expression so
     // they must be readded to the module here.
-    let mut new_inputs = f
-        .inputs
-        .clone()
-        .into_iter()
-        .filter(|i| !module.inputs.contains(i))
-        .collect();
-    module.append_inputs(&mut new_inputs);
+    module.append_inputs_from_module(&f);
 
     if let Some(p) = args.output {
         let mut file = std::fs::File::create(p)?;
