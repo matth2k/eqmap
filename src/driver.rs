@@ -10,10 +10,11 @@ use super::lut::{CircuitStats, LutExprInfo, LutLang};
 use super::serialize::serialize_egraph;
 use egg::{
     Analysis, BackoffScheduler, CostFunction, Explanation, Extractor, FromOpError, Language,
-    RecExpr, RecExprParseError, Rewrite, Runner, StopReason,
+    RecExpr, RecExprParseError, Rewrite, Runner, StopReason, TreeTerm,
 };
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::collections::{BTreeMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -51,6 +52,13 @@ where
 pub struct Comparison<T> {
     before: T,
     after: T,
+}
+
+impl<T> Comparison<T> {
+    /// Create a new [Comparison] struct.
+    pub fn new(before: T, after: T) -> Self {
+        Self { before, after }
+    }
 }
 
 /// The many stats associated with a synthesis run.
@@ -204,28 +212,36 @@ where
         })
     }
 
+    fn get_rule_uses_rec(map: &mut BTreeMap<String, usize>, expl: &[Rc<TreeTerm<L>>]) {
+        for t in expl {
+            if let Some(r) = t.backward_rule {
+                let name = r.to_string();
+                let count = map.get(&name).unwrap_or(&0) + 1;
+                map.insert(name, count);
+            }
+
+            if let Some(r) = t.forward_rule {
+                let name = r.to_string();
+                let count = map.get(&name).unwrap_or(&0) + 1;
+                map.insert(name, count);
+            }
+
+            for c in &t.child_proofs {
+                Self::get_rule_uses_rec(map, c);
+            }
+        }
+    }
+
     /// Get an accounting of rules used in the solution.
-    pub fn get_rule_uses(&mut self) -> Option<String> {
+    pub fn get_rule_uses(&self) -> Option<String> {
         self.expl.as_ref()?;
 
         let mut map: BTreeMap<String, usize> = BTreeMap::new();
 
-        let expl_list = self.expl.as_mut().unwrap();
+        let expl_list = self.expl.as_ref().unwrap();
 
         for expl in expl_list {
-            for t in expl.make_flat_explanation() {
-                if let Some(r) = t.backward_rule {
-                    let name = r.to_string();
-                    let count = map.get(&name).unwrap_or(&0) + 1;
-                    map.insert(name, count);
-                }
-
-                if let Some(r) = t.forward_rule {
-                    let name = r.to_string();
-                    let count = map.get(&name).unwrap_or(&0) + 1;
-                    map.insert(name, count);
-                }
-            }
+            Self::get_rule_uses_rec(&mut map, &expl.explanation_trees);
         }
         Some(map.iter().fold("".to_string(), |acc, (k, v)| {
             format!("{}\n\t{}: {}", acc, k, v)
@@ -248,6 +264,14 @@ where
             serde_json::to_writer_pretty(w, rpt)?;
         }
         Ok(())
+    }
+
+    /// Write the report of the output to a string.
+    pub fn write_report_to_string(&self) -> Result<String, std::io::Error> {
+        match &self.rpt {
+            Some(rpt) => Ok(serde_json::to_string_pretty(rpt)?),
+            None => Ok(String::new()),
+        }
     }
 
     /// Add a name to the synthesis report.
@@ -1038,7 +1062,7 @@ where
 
     let mut req = req.with_expr(expr.clone());
 
-    let mut result = req
+    let result = req
         .simplify_expr()
         .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
 
