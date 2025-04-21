@@ -29,7 +29,7 @@ mod tests {
     use driver::Canonical;
     use egg::{Analysis, Language, RecExpr};
     use lut::{LutExprInfo, LutLang};
-    use verilog::{SVModule, sv_parse_wrapper};
+    use verilog::{PrimitiveType, SVModule, sv_parse_wrapper};
 
     use super::*;
 
@@ -290,7 +290,7 @@ endmodule\n"
     #[test]
     fn test_assignment_emission() {
         let expr: RecExpr<LutLang> = "d".parse().unwrap();
-        let module = SVModule::from_expr(expr, "passthru".to_string(), vec!["y".to_string()]);
+        let module = SVModule::from_luts(expr, "passthru".to_string(), vec!["y".to_string()]);
         assert!(module.is_ok());
         let module = module.unwrap();
         assert_eq!(module.to_string(), get_assignment_verilog());
@@ -299,7 +299,7 @@ endmodule\n"
     #[test]
     fn test_duplicate_assignment() {
         let expr: RecExpr<LutLang> = "(BUS d d)".parse().unwrap();
-        let module = SVModule::from_expr(expr, "passthru".to_string(), vec![]);
+        let module = SVModule::from_luts(expr, "passthru".to_string(), vec![]);
         assert!(module.is_ok());
         let module = module.unwrap();
         let correct = "module passthru (
@@ -444,7 +444,7 @@ endmodule\n"
           wire b;
           output y;
           wire y;
-          AND2 _0_ (
+          AND _0_ (
               .A(a),
               .B(b),
               .Y(y)
@@ -471,19 +471,19 @@ endmodule\n"
         wire tmp1;
         wire tmp2;
 
-        AND2 _0_ (
+        AND _0_ (
             .A(1'd1),
             .B(1'h01),
             .Y(tmp1)
         );
 
-        AND2 _1_ (
+        AND _1_ (
             .A(1'b00),
             .B(1'd0),
             .Y(tmp2)
         );
 
-        AND2 _2_ (
+        AND _2_ (
             .A(tmp1),
             .B(tmp2),
             .Y(y)
@@ -502,11 +502,46 @@ endmodule\n"
     }
 
     #[test]
+    fn test_double_inverter() {
+        let module = "module dinv (
+            d,
+            y
+        );
+          input d;
+          wire d;
+          output y;
+          wire y;
+          wire __0__;
+
+          NOT _1_ (
+              .A(d),
+              .Y(__0__)
+          );
+
+          INV _2_ (
+              .A (__0__),
+              .ZN(y)
+          );
+
+        endmodule
+        "
+        .to_string();
+        let ast = sv_parse_wrapper(&module, None).unwrap();
+        let module = SVModule::from_ast(&ast);
+        assert!(module.is_ok());
+        let module = module.unwrap();
+        assert_eq!(
+            module.to_single_expr().unwrap().to_string(),
+            "(NOT (NOT d))".to_string()
+        );
+    }
+
+    #[test]
     fn test_verilog_emitter() {
         let mux: RecExpr<LutLang> = "(LUT 202 s1 (LUT 202 s0 a b) (LUT 202 s0 c d))"
             .parse()
             .unwrap();
-        let module = SVModule::from_expr(mux, "mux_4_1".to_string(), Vec::new());
+        let module = SVModule::from_luts(mux, "mux_4_1".to_string(), Vec::new());
         assert!(module.is_ok());
         let module = module.unwrap();
         let golden = "module mux_4_1 (
@@ -566,7 +601,7 @@ endmodule\n"
     #[test]
     fn test_emit_reg() {
         let reg: RecExpr<LutLang> = "(REG a)".parse().unwrap();
-        let module = SVModule::from_expr(reg, "my_reg".to_string(), Vec::new());
+        let module = SVModule::from_luts(reg, "my_reg".to_string(), Vec::new());
         assert!(module.is_ok());
         let module = module.unwrap();
         let golden = "module my_reg (
@@ -599,7 +634,7 @@ endmodule\n"
         let expr: RecExpr<LutLang> = "(AND a (XOR b (NOR c (NOT (MUX s t false)))))"
             .parse()
             .unwrap();
-        let module = SVModule::from_expr(expr, "gate_list".to_string(), Vec::new());
+        let module = SVModule::from_luts(expr, "gate_list".to_string(), Vec::new());
         assert!(module.is_ok());
         let module = module.unwrap();
         let golden = "module gate_list (
@@ -640,19 +675,19 @@ endmodule\n"
       .A(__1__),
       .Y(__2__)
   );
-  NOR2 #(
+  NOR #(
   ) __8__ (
       .A(c),
       .B(__2__),
       .Y(__3__)
   );
-  XOR2 #(
+  XOR #(
   ) __9__ (
       .A(b),
       .B(__3__),
       .Y(__4__)
   );
-  AND2 #(
+  AND #(
   ) __10__ (
       .A(a),
       .B(__4__),
@@ -854,6 +889,22 @@ endmodule\n"
         let expr: RecExpr<CellLang> = "(AND a b)".parse().unwrap();
         assert!(CellLang::verify_expr(&expr).is_ok());
         assert!(matches!(expr.as_ref().last().unwrap(), CellLang::And(_)));
+    }
+
+    #[test]
+    fn test_input_lists() {
+        assert_eq!(
+            PrimitiveType::AND4.get_input_list(),
+            vec!["A1", "A2", "A3", "A4"]
+        );
+        assert_eq!(
+            PrimitiveType::AOI22.get_input_list(),
+            vec!["A1", "A2", "B1", "B2"]
+        );
+        assert_eq!(
+            PrimitiveType::LUT6.get_input_list(),
+            vec!["I0", "I1", "I2", "I3", "I4", "I5"]
+        );
     }
 
     #[test]
