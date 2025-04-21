@@ -134,7 +134,7 @@ fn main() -> std::io::Result<()> {
 
     #[cfg(feature = "dyn_decomp")]
     if args.decomp || args.disassemble.is_some() {
-        rules.append(&mut dyn_decompositions(false));
+        rules.append(&mut dyn_decompositions(true));
     }
 
     if !args.no_retime {
@@ -227,7 +227,7 @@ fn main() -> std::io::Result<()> {
 
     eprintln!("INFO: Compiling Verilog...");
     let expr = f
-        .to_single_expr()
+        .to_single_lut_expr()
         .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
 
     eprintln!("INFO: Building e-graph...");

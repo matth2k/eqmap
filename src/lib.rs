@@ -282,7 +282,7 @@ endmodule\n"
         assert!(module.is_ok());
         let module = module.unwrap();
         assert_eq!(
-            module.to_single_expr().unwrap().to_string(),
+            module.to_single_lut_expr().unwrap().to_string(),
             "d".to_string()
         );
     }
@@ -328,7 +328,7 @@ endmodule\n"
         assert!(module.is_ok());
         let module = module.unwrap();
         assert_eq!(
-            module.to_single_expr().unwrap().to_string(),
+            module.to_single_lut_expr().unwrap().to_string(),
             "(LUT 17361601744336890538 true false b a c d)".to_string()
         );
     }
@@ -387,7 +387,7 @@ endmodule\n"
             .unwrap()
             .with_fname("mux_4_1".to_string());
         assert!(module.get_name() == "mux_4_1");
-        let expr = module.to_expr().unwrap();
+        let expr: RecExpr<LutLang> = module.to_expr().unwrap();
         assert_eq!(
             expr.to_string(),
             "(LUT 17361601744336890538 s0 s1 b a c d)".to_string()
@@ -402,7 +402,7 @@ endmodule\n"
         assert!(module.is_ok());
         let module = module.unwrap();
         assert_eq!(
-            module.to_single_expr().unwrap().to_string(),
+            module.to_single_lut_expr().unwrap().to_string(),
             "(REG d)".to_string()
         );
         let output = module.to_string();
@@ -456,8 +456,42 @@ endmodule\n"
         assert!(module.is_ok());
         let module = module.unwrap();
         assert_eq!(
-            module.to_single_expr().unwrap().to_string(),
+            module.to_single_lut_expr().unwrap().to_string(),
             "(AND a b)".to_string()
+        );
+    }
+
+    #[test]
+    fn test_cell_parse() {
+        let module = "module my_cell (
+            a,
+            b,
+            c,
+            y
+        );
+          input a;
+          wire a;
+          input b;
+          wire b;
+          input c;
+          wire c;
+          output y;
+          wire y;
+          AOI21_X1 _0_ (
+              .A(a),
+              .B1(b),
+              .B2(c),
+              .Y(y)
+          );
+        endmodule"
+            .to_string();
+        let ast = sv_parse_wrapper(&module, None).unwrap();
+        let module = SVModule::from_ast(&ast);
+        assert!(module.is_ok());
+        let module = module.unwrap();
+        assert_eq!(
+            module.to_expr::<CellLang>().unwrap().to_string(),
+            "(AOI21_X1 a b c)".to_string()
         );
     }
 
@@ -496,7 +530,7 @@ endmodule\n"
         assert!(module.is_ok());
         let module = module.unwrap();
         assert_eq!(
-            module.to_single_expr().unwrap().to_string(),
+            module.to_single_lut_expr().unwrap().to_string(),
             "(AND (AND true true) (AND false false))".to_string()
         );
     }
@@ -531,7 +565,7 @@ endmodule\n"
         assert!(module.is_ok());
         let module = module.unwrap();
         assert_eq!(
-            module.to_single_expr().unwrap().to_string(),
+            module.to_single_lut_expr().unwrap().to_string(),
             "(NOT (NOT d))".to_string()
         );
     }
@@ -901,9 +935,10 @@ endmodule\n"
             PrimitiveType::AOI22.get_input_list(),
             vec!["A1", "A2", "B1", "B2"]
         );
+        // LUT input list is backwards relative to the IR
         assert_eq!(
             PrimitiveType::LUT6.get_input_list(),
-            vec!["I0", "I1", "I2", "I3", "I4", "I5"]
+            vec!["I5", "I4", "I3", "I2", "I1", "I0"]
         );
     }
 
