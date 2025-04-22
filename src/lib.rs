@@ -481,7 +481,7 @@ endmodule\n"
               .A(a),
               .B1(b),
               .B2(c),
-              .Y(y)
+              .ZN(y)
           );
         endmodule"
             .to_string();
@@ -492,6 +492,38 @@ endmodule\n"
         assert_eq!(
             module.to_expr::<CellLang>().unwrap().to_string(),
             "(AOI21_X1 a b c)".to_string()
+        );
+    }
+
+    #[test]
+    fn test_cell_parse_and() {
+        let module = "module my_cell (
+            a,
+            b,
+            y
+        );
+          input a;
+          wire a;
+          input b;
+          wire b;
+          output y;
+          wire y;
+          AND _0_ (
+              .A(a),
+              .B(b),
+              .Y(y)
+          );
+        endmodule"
+            .to_string();
+        let ast = sv_parse_wrapper(&module, None).unwrap();
+        let module = SVModule::from_ast(&ast);
+        assert!(module.is_ok());
+        let module = module.unwrap();
+        let expr = module.to_expr::<CellLang>().unwrap();
+        assert!(matches!(expr.last().unwrap(), CellLang::And(_)));
+        assert_eq!(
+            module.to_expr::<CellLang>().unwrap().to_string(),
+            "(AND a b)".to_string()
         );
     }
 
@@ -977,5 +1009,18 @@ endmodule\n"
 endmodule\n"
             .to_string();
         assert_eq!(module.to_string(), golden);
+    }
+
+    #[test]
+    fn test_check_equiv() {
+        let expr1: RecExpr<LutLang> = "(MUX s1 (MUX s0 a b) (MUX s0 c d))".parse().unwrap();
+        let expr2: RecExpr<LutLang> = "(LUT 51952 s1 (LUT 61642 s1 s0 c d) a b)".parse().unwrap();
+        let expr3: RecExpr<LutLang> = "(LUT 51952 s0 (LUT 61642 s0 s1 b d) a c)".parse().unwrap();
+        assert!(LutLang::func_equiv(&expr1, &expr2).is_equiv());
+        assert!(LutLang::func_equiv(&expr2, &expr3).is_equiv());
+        let expr3: RecExpr<LutLang> = "(LUT 51952 s0 (LUT 61642 s1 s0 b d) a c)".parse().unwrap();
+        assert!(LutLang::func_equiv(&expr2, &expr3).is_not_equiv());
+        let expr3: RecExpr<LutLang> = "(LUT 51952 s0 (LUT 61643 s0 s1 b d) a c)".parse().unwrap();
+        assert!(LutLang::func_equiv(&expr2, &expr3).is_not_equiv());
     }
 }

@@ -1,53 +1,27 @@
 use clap::Parser;
-use egg::{FromOpError, RecExpr, RecExprParseError};
 use lut_synth::{
-    asic::{CellAnalysis, CellLang, CellRpt, asic_rewrites},
-    driver::{SynthRequest, process_string_expression, simple_reader},
-    verilog::SVModule,
+    asic::{CellLang, CellRpt, asic_rewrites},
+    driver::{SynthRequest, process_expression},
+    verilog::{SVModule, sv_parse_wrapper},
 };
-use std::path::PathBuf;
-
-fn get_main_runner(
-    s: &str,
-) -> Result<SynthRequest<CellLang, CellAnalysis>, RecExprParseError<FromOpError>> {
-    let expr: RecExpr<CellLang> = s.parse()?;
-    let rules = asic_rewrites();
-
-    Ok(SynthRequest::default()
-        .with_expr(expr)
-        .with_rules(rules)
-        .with_k(4)
-        .with_asserts()
-        .without_progress_bar()
-        .with_joint_limits(20, 20_000, 30))
-}
-
-#[allow(dead_code)]
-/// parse an expression, simplify it with DSD and at most 4 fan-in, and pretty print it back out
-fn simplify(s: &str) -> String {
-    let mut req = get_main_runner(s).unwrap();
-    req.simplify_expr::<CellRpt>()
-        .unwrap()
-        .get_expr()
-        .to_string()
-}
-
-#[allow(dead_code)]
-/// parse an expression, simplify it with DSD and at most 4 fan-in, and pretty print it back out
-fn simplify_w_proof(s: &str) -> String {
-    let mut req = get_main_runner(s).unwrap().with_proof();
-    req.simplify_expr::<CellRpt>()
-        .unwrap()
-        .get_expr()
-        .to_string()
-}
+use std::{
+    io::{Read, Write, stdin},
+    path::PathBuf,
+};
 
 /// ASIC Technology Mapping Optimization with E-Graphs
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Path to input file. If not provided, reads from stdin
+    /// Verilog file to read from (or use stdin)
     input: Option<PathBuf>,
+
+    /// Verilog file to output to (or use stdout)
+    output: Option<PathBuf>,
+
+    /// If provided, output a JSON file with result data
+    #[arg(long)]
+    report: Option<PathBuf>,
 
     /// If provided, output a condensed JSON file with the e-graph
     #[cfg(feature = "graph_dumps")]
@@ -58,37 +32,21 @@ struct Args {
     #[arg(short = 'a', long, default_value_t = false)]
     assert_sat: bool,
 
-    /// Do not verify the functionality of the output
-    #[arg(short = 'f', long, default_value_t = false)]
-    verify: bool,
-
-    /// Don't canonicalize the input expression
-    #[arg(short = 'c', long, default_value_t = false)]
-    canonicalize: bool,
-
-    /// Opt a specific LUT expr instead of from file
-    #[arg(long)]
-    command: Option<String>,
-
     /// Perform an exact extraction using ILP (much slower)
     #[cfg(feature = "exactness")]
     #[arg(short = 'e', long, default_value_t = false)]
     exact: bool,
 
-    /// Print explanations (this generates a proof and runs longer)
+    /// Print explanations (generates a proof and runs slower)
     #[arg(short = 'v', long, default_value_t = false)]
     verbose: bool,
-
-    /// Output Verilog
-    #[arg(long, default_value_t = false)]
-    verilog: bool,
 
     /// Extract for minimum circuit depth
     #[arg(long, default_value_t = false)]
     min_depth: bool,
 
     /// Max fan in size allowed for extracted Cells
-    #[arg(short = 'k', long, default_value_t = 4)]
+    #[arg(short = 'k', long, default_value_t = 6)]
     k: usize,
 
     /// Build/extraction timeout in seconds
@@ -111,7 +69,33 @@ fn main() -> std::io::Result<()> {
         eprintln!("WARNING: Debug assertions are enabled");
     }
 
-    let buf = simple_reader(args.command, args.input)?;
+    eprintln!("INFO: ASIC Technology Mapping Optimization with E-Graphs");
+
+    let mut buf = String::new();
+
+    let path: Option<PathBuf> = match args.input {
+        Some(p) => {
+            std::fs::File::open(&p)?.read_to_string(&mut buf)?;
+            Some(p)
+        }
+        None => {
+            eprintln!("INFO: Reading from stdin...");
+            stdin().read_to_string(&mut buf)?;
+            None
+        }
+    };
+
+    let ast = sv_parse_wrapper(&buf, path)
+        .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+
+    let f =
+        SVModule::from_ast(&ast).map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+
+    eprintln!(
+        "INFO: Module {} has {} outputs",
+        f.get_name(),
+        f.get_outputs().len()
+    );
 
     let rules = asic_rewrites();
 
@@ -119,10 +103,10 @@ fn main() -> std::io::Result<()> {
         eprintln!("INFO: Running with {} rewrite rules", rules.len());
     }
 
-    let req = SynthRequest::default().with_rules(rules).with_k(args.k);
+    let req = SynthRequest::default().with_rules(rules);
 
     let req = match (args.timeout, args.node_limit, args.iter_limit) {
-        (None, None, None) => req.with_joint_limits(2, 20_000, 9),
+        (None, None, None) => req.with_joint_limits(10, 48_000, 32),
         (Some(t), None, None) => req.time_limited(t),
         (None, Some(n), None) => req.node_limited(n),
         (None, None, Some(i)) => req.iter_limited(i),
@@ -140,13 +124,13 @@ fn main() -> std::io::Result<()> {
         req
     };
 
-    let req = if args.canonicalize {
-        req
-    } else {
-        req.without_canonicalization()
-    };
-
     let req = if args.verbose { req.with_proof() } else { req };
+
+    let req = if args.report.is_some() {
+        req.with_report()
+    } else {
+        req
+    };
 
     #[cfg(feature = "graph_dumps")]
     let req = match args.dump_graph {
@@ -167,49 +151,54 @@ fn main() -> std::io::Result<()> {
         req
     };
 
-    for line in buf.lines() {
-        let result = process_string_expression::<CellLang, _, CellRpt>(
-            line,
-            req.clone(),
-            !args.verify,
-            args.verbose,
-        )?;
-        if !result.is_empty() {
-            if args.verilog {
-                let module = SVModule::from_cells(
-                    result.get_expr().to_owned(),
-                    "top".to_string(),
-                    Vec::new(),
-                );
-                let module =
-                    module.map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
-                print!(
-                    "/* Generated by {} {} */\n\n{}",
-                    env!("CARGO_PKG_NAME"),
-                    env!("CARGO_PKG_VERSION"),
-                    module
-                );
-            } else {
-                println!("{}", result);
-            }
-        }
+    #[cfg(feature = "exactness")]
+    if args.exact && args.output.is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Stdout is reserved for cbc solver. Specify an output file",
+        ));
     }
+
+    eprintln!("INFO: Compiling Verilog...");
+    let expr = f
+        .to_expr()
+        .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+
+    eprintln!("INFO: Building e-graph...");
+    let result = process_expression::<CellLang, _, CellRpt>(expr, req, true, args.verbose)?
+        .with_name(f.get_name());
+
+    if let Some(p) = args.report {
+        let mut writer = std::fs::File::create(p)?;
+        result.write_report(&mut writer)?;
+    }
+
+    eprintln!("INFO: Writing output to Verilog...");
+    let output_names: Vec<String> = f.get_outputs().iter().map(|x| x.to_string()).collect();
+    let mut module = SVModule::from_cells(
+        result.get_expr().to_owned(),
+        f.get_name().to_string(),
+        output_names,
+    )
+    .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?;
+
+    // Unused inputs from the original module are lost upon conversion to a LutLang expression so
+    // they must be readded to the module here.
+    module.append_inputs_from_module(&f);
+
+    if let Some(p) = args.output {
+        let mut file = std::fs::File::create(p)?;
+        write!(
+            file,
+            "/* Generated by {} {} */\n\n{}",
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+            module
+        )?;
+        eprintln!("INFO: Goodbye");
+    } else {
+        print!("{}", module);
+    }
+
     Ok(())
-}
-
-#[test]
-fn simple_tests() {
-    assert_eq!(simplify("(AND a b)"), "(INV_X1 (NAND2_X1 a b))");
-    assert_eq!(simplify("(INV a)"), "(INV_X1 a)");
-    assert_eq!(simplify("(AND a true)"), "a");
-}
-
-#[test]
-fn cell_rpt() {
-    let mut req = get_main_runner("(INV a)").unwrap().with_report();
-    let result = req.simplify_expr::<CellRpt>().unwrap();
-    let rpt = result.write_report_to_string();
-    assert!(rpt.is_ok());
-    let rpt = rpt.unwrap();
-    assert!(rpt.contains("name"));
 }
