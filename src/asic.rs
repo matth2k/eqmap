@@ -8,12 +8,14 @@ use super::check::Check;
 use super::driver::Comparison;
 use super::driver::Report;
 use super::driver::{Canonical, CircuitLang, EquivCheck, Explanable, Extractable};
+use super::verilog::PrimitiveType;
 use egg::{
     Analysis, AstSize, CostFunction, DidMerge, EGraph, Id, Language, RecExpr, Rewrite, Symbol,
     define_language, rewrite,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 define_language! {
     /// Definitions of e-node types. Programs are the only node type that is not a net/signal.
@@ -119,6 +121,28 @@ impl CostFunction<CellLang> for CellCountFn {
     }
 }
 
+/// A cost function that extracts a circuit with the least area
+pub struct AreaFn;
+
+impl CostFunction<CellLang> for AreaFn {
+    type Cost = f32;
+    fn cost<C>(&mut self, enode: &CellLang, mut costs: C) -> Self::Cost
+    where
+        C: FnMut(Id) -> Self::Cost,
+    {
+        let op_cost = match enode {
+            CellLang::Const(_) | CellLang::Var(_) => PrimitiveType::INV.get_min_area().unwrap(),
+            CellLang::Cell(n, _l) => {
+                let prim = PrimitiveType::from_str(n.as_str()).unwrap();
+                prim.get_min_area().unwrap_or(1.33)
+            }
+            _ => f32::MAX,
+        };
+
+        enode.fold(op_cost, |sum, id| sum + costs(id))
+    }
+}
+
 impl Extractable for CellLang {
     fn depth_cost_fn() -> impl CostFunction<Self, Cost = i64> {
         DepthCostFn
@@ -126,6 +150,10 @@ impl Extractable for CellLang {
 
     fn cell_cost_with_reg_weight_fn(cut_size: usize, _w: u64) -> impl CostFunction<Self> {
         CellCountFn::new(cut_size)
+    }
+
+    fn exact_area_cost_fn() -> impl CostFunction<Self> {
+        AreaFn
     }
 
     fn filter_cost_fn(_set: std::collections::HashSet<String>) -> impl CostFunction<Self> {
@@ -186,22 +214,51 @@ impl Analysis<CellLang> for CellAnalysis {
     fn make(_egraph: &mut EGraph<CellLang, Self>, _enode: &CellLang) -> Self::Data {}
 }
 
-fn get_cell_counts(expr: &RecExpr<CellLang>) -> BTreeMap<String, usize> {
-    let mut counts = BTreeMap::new();
-    for node in expr.iter() {
-        if let CellLang::Cell(name, _) = node {
-            *counts.entry(name.to_string()).or_insert(0) += 1;
-        }
-    }
-    counts
-}
-
 #[derive(Debug, Serialize)]
 struct CircuitStats {
     /// AST size of the circuit
     ast_size: usize,
     /// Number of cells in the circuit
     cell_counts: BTreeMap<String, usize>,
+    /// The area of the circuit
+    area: f32,
+}
+
+impl CircuitStats {
+    fn get_cell_counts(expr: &RecExpr<CellLang>) -> BTreeMap<String, usize> {
+        let mut counts = BTreeMap::new();
+        for node in expr.iter() {
+            if let CellLang::Cell(name, _) = node {
+                *counts.entry(name.to_string()).or_insert(0) += 1;
+            }
+        }
+        counts
+    }
+
+    fn get_area(expr: &RecExpr<CellLang>) -> f32 {
+        expr.iter()
+            .map(|n| {
+                if let CellLang::Cell(name, _) = n {
+                    PrimitiveType::from_str(name.as_str())
+                        .unwrap()
+                        .get_min_area()
+                        .unwrap_or(1.33)
+                } else if matches!(n, CellLang::Const(_) | CellLang::Var(_)) {
+                    PrimitiveType::INV.get_min_area().unwrap()
+                } else {
+                    0.0
+                }
+            })
+            .sum()
+    }
+
+    fn new(expr: &RecExpr<CellLang>) -> Self {
+        Self {
+            ast_size: expr.len(),
+            cell_counts: Self::get_cell_counts(expr),
+            area: Self::get_area(expr),
+        }
+    }
 }
 
 /// An empty report struct for synthesizing CellLang
@@ -235,14 +292,8 @@ impl Report<CellLang> for CellRpt {
     {
         Ok(CellRpt::new(
             "top".to_string(),
-            CircuitStats {
-                ast_size: input.len(),
-                cell_counts: get_cell_counts(input),
-            },
-            CircuitStats {
-                ast_size: output.len(),
-                cell_counts: get_cell_counts(output),
-            },
+            CircuitStats::new(input),
+            CircuitStats::new(output),
         ))
     }
 
