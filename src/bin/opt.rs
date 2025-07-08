@@ -1,8 +1,8 @@
 use clap::Parser;
 use egg::*;
 #[cfg(feature = "dyn_decomp")]
-use lut_synth::rewrite::dyn_decompositions;
-use lut_synth::{
+use eqmap::rewrite::dyn_decompositions;
+use eqmap::{
     analysis::LutAnalysis,
     driver::{SynthReport, SynthRequest, process_string_expression, simple_reader},
     lut,
@@ -197,7 +197,7 @@ fn main() -> std::io::Result<()> {
         Some(list) => req
             .without_canonicalization()
             .with_disassembly_into(&list)
-            .map_err(|s| std::io::Error::new(std::io::ErrorKind::Other, s))?,
+            .map_err(std::io::Error::other)?,
         None => req,
     };
 
@@ -216,7 +216,7 @@ fn main() -> std::io::Result<()> {
             args.verbose,
         )?;
         if !result.is_empty() {
-            println!("{}", result);
+            println!("{result}");
         }
     }
     Ok(())
@@ -281,14 +281,14 @@ fn test_incorrect_dsd() {
     for i in 0..64 {
         let pos_to_flip: usize = i;
         let p = p ^ (1 << pos_to_flip);
-        let other: RecExpr<lut::LutLang> = format!("(LUT {} s1 s0 a b c d)", p).parse().unwrap();
+        let other: RecExpr<lut::LutLang> = format!("(LUT {p} s1 s0 a b c d)").parse().unwrap();
         assert!(!lut::LutLang::func_equiv(&expr, &other).unwrap());
     }
 }
 
 #[test]
 fn test_greedy_folds() {
-    use lut_synth::driver::Canonical;
+    use eqmap::driver::Canonical;
     assert_eq!(simplify("(LUT 202 true a b)"), "a");
     assert_eq!(simplify("(LUT 0 a)"), "false");
     assert_eq!(simplify("(LUT 3 a)"), "true");
