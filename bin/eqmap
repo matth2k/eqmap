@@ -1,15 +1,15 @@
 #!/bin/bash
 set -eo pipefail
-LIB="$(dirname $0)/../verilog/celllang.v"
+LIB="$(dirname $0)/../verilog/lutlang.v"
 LIB="$(realpath $LIB)"
 SIMLIB="$(dirname $0)/../verilog/simlib.v"
 SIMLIB="$(realpath $SIMLIB)"
 MKFILE=$1.mk
-TOOL=eqmap_asic
+TOOL=eqmap_fpga
 
 # Decide whether to use Vivado or Yosys based on the stem given to Make
 if [ -z $FSTEM ]; then
-    FSTEM=synth
+    FSTEM=yxil
 fi
 
 if [ "$1" == "--help" ] || [ "$2" == "--help" ] || [ "$3" == "--help" ]; then
@@ -40,8 +40,7 @@ else
     echo "	rm -f *.xil *.synth *.ys *.dot *.png" >> $MKFILE
     echo "" >> $MKFILE
     echo "%.v.synth: %_synth.ys" >> $MKFILE
-    # Make yosys quiet
-    echo "	+\$(YOSYS) -s \$< >> /dev/null" >> $MKFILE
+    echo "	+\$(YOSYS) -s \$<" >> $MKFILE
     echo "" >> $MKFILE
     echo "%.v.yxil: %_yxil.ys" >> $MKFILE
     echo "	+\$(YOSYS) -s \$<" >> $MKFILE
