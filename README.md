@@ -1,4 +1,4 @@
-![](https://github.com/matth2k/eqmap/actions/workflows/rust.yml/badge.svg)
+![](https://github.com/cornell-zhang/eqmap/actions/workflows/rust.yml/badge.svg)
 [![Docs](https://img.shields.io/badge/docs-github--pages-blue)](https://cornell-zhang.github.io/eqmap/)
 
 # EqMap: FPGA LUT Technology Mapping w/ E-Graphs
